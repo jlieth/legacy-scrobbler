@@ -1,0 +1,7 @@
+tox
+pytest
+pytest-cov
+pytest-random-order
+httmock
+flake8
+black
