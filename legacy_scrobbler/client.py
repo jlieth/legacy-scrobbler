@@ -3,6 +3,7 @@ import datetime
 import logging
 
 from legacy_scrobbler.exceptions import HandshakeError, HardFailureError
+from legacy_scrobbler.listen import Listen
 
 
 logger = logging.getLogger("legacy_scrobbler")
@@ -16,12 +17,16 @@ class ScrobblerClient:
         self.delay = 0
         self.hard_fails = 0
         self.last_handshake = None
-        self.listens_queue = deque()
+        self.queue = deque()
 
     def tick(self):
         if self.state == "no_session" and self._allowed_to_handshake:
             logger.info("Executing handshake attempt")
             self._execute_handshake()
+
+    def enqueue_listens(self, *listens: Listen):
+        self.queue.extend(listens)
+        self._sort_queue()
 
     def _execute_handshake(self):
         try:
@@ -48,33 +53,44 @@ class ScrobblerClient:
 
     @property
     def _allowed_to_handshake(self) -> bool:
-        # if no delay is set, client may handshake again
-        if self.delay == 0:
-            return True
-
-        # if no last_handshake is set, client may handshake despite delay
-        if self.last_handshake is None:
-            return True
-
-        # if the timedelta between the last handshake and now is greater than
-        # the delay, the client may handshake again
-        now = datetime.datetime.now(self.last_handshake.tzinfo)
-        timedelta_since_last_handshake = now - self.last_handshake
-        delay_has_passed = timedelta_since_last_handshake.seconds >= self.delay
-
-        if delay_has_passed:
-            return True
-        else:
-            next_delta = self._time_to_next_handshake
-            logger.debug(f"Next handshake attempt allowed in {next_delta}")
+        time_until = self._time_to_next_handshake
+        if time_until.seconds > 0:
+            logger.info(f"Next handshake attempt allowed in {time_until}")
             return False
+        else:
+            return True
 
     @property
     def _time_to_next_handshake(self) -> datetime.timedelta:
+        """
+        Calculate the time that has to elapse until the next handshake may
+        be attempted.
+
+        Will return a timedelta of zero if self.delay is zero or
+        self.last_handshake is None.
+        """
+        # if no delay is set, timedelta is zero
+        if self.delay == 0:
+            return datetime.timedelta(seconds=0)
+
+        # if no last_handshake is set, timedelta is zero
+        if self.last_handshake is None:
+            return datetime.timedelta(seconds=0)
+
+        # if the time of the last handshake plus the delay is earlier
+        # than now, timedelta is zero (since no time needs to pass until
+        # the next handshake attempt may be made)
         delay_delta = datetime.timedelta(seconds=self.delay)
         next_handshake = self.last_handshake + delay_delta
         now = datetime.datetime.now(self.last_handshake.tzinfo)
-        return next_handshake - now
+
+        if next_handshake <= now:
+            return datetime.timedelta(seconds=0)
+        else:
+            return next_handshake - now
+
+    def _sort_queue(self):
+        self.queue = deque(sorted(self.queue, key=lambda listen: listen.date))
 
     def _increase_delay(self):
         self.delay = (self.delay * 2) or 60
