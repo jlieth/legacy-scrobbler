@@ -19,33 +19,9 @@ class ScrobblerClient:
         self.listens_queue = deque()
 
     def tick(self):
-        if self.state == "no_session" and not self._allowed_to_handshake():
-            delta = datetime.timedelta(seconds=self.delay)
-            next_handshake = self.last_handshake + delta
-            now = datetime.datetime.now(self.last_handshake.tzinfo)
-            time_to_next_handshake = next_handshake - now
-            logger.debug(
-                f"No session exists. Time till next handshake attempt: {time_to_next_handshake}"
-            )
-        elif self.state == "no_session" and self._allowed_to_handshake():
+        if self.state == "no_session" and self._allowed_to_handshake:
             logger.info("Executing handshake attempt")
             self._execute_handshake()
-
-    def _allowed_to_handshake(self):
-        # if no delay is set, client may handshake again
-        if self.delay == 0:
-            return True
-
-        # if no last_handshake is set, client may handshake despite delay
-        if self.last_handshake is None:
-            return True
-
-        # if the timedelta between the last handshake and now is greater than
-        # the delay, the client may handshake again
-        now = datetime.datetime.now(self.last_handshake.tzinfo)
-        timedelta_since_last_handshake = now - self.last_handshake
-
-        return timedelta_since_last_handshake.seconds >= self.delay
 
     def _execute_handshake(self):
         try:
@@ -69,6 +45,36 @@ class ScrobblerClient:
             logger.info("Handshake successful.")
         finally:
             self.last_handshake = datetime.datetime.now(datetime.timezone.utc)
+
+    @property
+    def _allowed_to_handshake(self) -> bool:
+        # if no delay is set, client may handshake again
+        if self.delay == 0:
+            return True
+
+        # if no last_handshake is set, client may handshake despite delay
+        if self.last_handshake is None:
+            return True
+
+        # if the timedelta between the last handshake and now is greater than
+        # the delay, the client may handshake again
+        now = datetime.datetime.now(self.last_handshake.tzinfo)
+        timedelta_since_last_handshake = now - self.last_handshake
+        delay_has_passed = timedelta_since_last_handshake.seconds >= self.delay
+
+        if delay_has_passed:
+            return True
+        else:
+            next_delta = self._time_to_next_handshake
+            logger.debug(f"Next handshake attempt allowed in {next_delta}")
+            return False
+
+    @property
+    def _time_to_next_handshake(self) -> datetime.timedelta:
+        delay_delta = datetime.timedelta(seconds=self.delay)
+        next_handshake = self.last_handshake + delay_delta
+        now = datetime.datetime.now(self.last_handshake.tzinfo)
+        return next_handshake - now
 
     def _increase_delay(self):
         self.delay = (self.delay * 2) or 60
