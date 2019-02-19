@@ -1,5 +1,6 @@
 from collections import deque
 import datetime
+import random
 import unittest
 from unittest.mock import patch, PropertyMock
 
@@ -8,7 +9,10 @@ from legacy_scrobbler.listen import Listen
 
 
 class ScrobblerClientTests(unittest.TestCase):
+    """Tests for legavy_scrobbler.client.ScrobblerClient"""
+
     def setUp(self):
+        # create client
         self.client = ScrobblerClient(
             name="ScrobblerNetwork",
             username="testuser",
@@ -16,51 +20,70 @@ class ScrobblerClientTests(unittest.TestCase):
             handshake_url="http://somescrobblernetwork.com/handshake",
         )
 
-    def test_enqueue(self):
+        # create some listens for later
+        # list is chronological
         now = datetime.datetime.now(datetime.timezone.utc)
+        self.listens = [
+            Listen(
+                date=now - datetime.timedelta(minutes=10),
+                artist_name="Artist1",
+                track_title="Track2",
+            ),
+            Listen(
+                date=now - datetime.timedelta(minutes=8),
+                artist_name="Artist3",
+                track_title="Track4",
+            ),
+            Listen(
+                date=now - datetime.timedelta(minutes=6),
+                artist_name="Artist5",
+                track_title="Track6",
+            ),
+            Listen(
+                date=now - datetime.timedelta(minutes=4),
+                artist_name="Artist7",
+                track_title="Track8",
+            ),
+            Listen(
+                date=now - datetime.timedelta(minutes=2),
+                artist_name="Artist9",
+                track_title="Track10",
+            ),
+        ]
 
-        first = Listen(
-            date=now - datetime.timedelta(minutes=10),
-            artist_name="Artist",
-            track_title="Track",
-        )
+    def test_enqueue(self):
+        """
+        Tests legacy_scrobbler.client.ScrobblerClient.enqueue_listens()
 
-        second = Listen(
-            date=now - datetime.timedelta(minutes=8),
-            artist_name="Artist",
-            track_title="Track",
-        )
+        Uses some listens from self.listens as initial queue, shuffles the
+        list of other listens and calls enqueue_listens() with the shuffled
+        list. Resulting queue should be in chronological order (same as
+        self.listens, just as a deque).
+        """
+        # initialize queue as [2, 4] (indices are of course zero-indexed)
+        queue = [self.listens[1], self.listens[3]]
+        self.client.queue = deque(queue)
 
-        third = Listen(
-            date=now - datetime.timedelta(minutes=6),
-            artist_name="Artist",
-            track_title="Track",
-        )
+        # enqueue other listens in order [3, 5, 1]
+        others = [self.listens[0], self.listens[2], self.listens[4]]
+        random.shuffle(others)
+        self.client.enqueue_listens(others)
 
-        fourth = Listen(
-            date=now - datetime.timedelta(minutes=4),
-            artist_name="Artist",
-            track_title="Track",
-        )
-
-        fifth = Listen(
-            date=now - datetime.timedelta(minutes=2),
-            artist_name="Artist",
-            track_title="Track",
-        )
-
-        # initialize queue as [2, 4]
-        self.client.queue = deque([second, fourth])
-
-        # enqueue other listens
-        self.client.enqueue_listens(third, fifth, first)
-
-        # queue should be [1, 2, 3, 4, 5] now
-        self.assertEqual(
-            self.client.queue, deque([first, second, third, fourth, fifth])
-        )
+        # queue should be in same order [1, 2, 3, 4, 5] as self.listens now
+        self.assertEqual(self.client.queue, deque(self.listens))
 
     def test_allowed_to_handshake(self):
+        """
+        Tests legacy_scrobbler.client.ScrobblerClient._allowed_to_handshake
+        in two circumstances:
+        - If ScrobblerClient._time_to_next_handshake returns a timedelta
+          of zero, _allowed_to_handshake() should return True.
+        - If ScrobblerClient._time_to_next_handshake returns a timedelta
+          greater than zero, _allowed_to_handshake should return False.
+
+        The test mocks _time_to_next_handshake in order to create the two
+        circumstances that should be tested.
+        """
         # patch _time_to_next_handshake method to always return a delta of
         # zero. _allowed_to_handshake should return True in this case.
         with patch.object(
@@ -82,6 +105,20 @@ class ScrobblerClientTests(unittest.TestCase):
             self.assertFalse(self.client._allowed_to_handshake)
 
     def test_time_to_next_handshake(self):
+        """
+        Tests legacy_scrobbler.client.ScrobblerClient._test_time_to_next_handshake
+        for the four possible expected outcomes:
+        - If no delay is set in the client, the method should return a timedelta
+          of zero
+        - If no handshake has happened yet, even if a delay is set, the method
+          should return a timedelta of zero
+        - If a delay is set and the timestamp of a previous handshake is saved,
+          the method should return a timedelta of zero if the last handshake
+          was longer ago than the current delay
+        - If a delay is set and the timestamp of a previous handshake is saved,
+          the method should return a positive timedelta (the remaining time
+          that has to pass until a handshake attempt may be made)
+        """
         # timedelta on no delay should be zero
         self.client.delay = 0
         self.assertEqual(
@@ -114,37 +151,66 @@ class ScrobblerClientTests(unittest.TestCase):
         self.assertTrue(lower_bound <= actual <= upper_bound)
 
     def test_sort_queue(self):
-        now = datetime.datetime.now(datetime.timezone.utc)
+        """Tests legacy_scrobbler.client.ScrobblerClient._sort_queue()"""
+        # set the shuffled self.listens as queue
+        queue = self.listens[:]
+        random.shuffle(queue)
+        self.client.queue = deque(queue)
 
-        first = Listen(
-            date=now - datetime.timedelta(minutes=100),
-            artist_name="Artist",
-            track_title="Track",
-        )
-
-        second = Listen(
-            date=now - datetime.timedelta(minutes=4),
-            artist_name="Artist",
-            track_title="Track",
-        )
-
-        third = Listen(
-            date=now + datetime.timedelta(minutes=17),
-            artist_name="Artist",
-            track_title="Track",
-        )
-
-        # queue set as [3, 1, 2]
-        self.client.queue = deque([third, first, second])
-
-        # sorting should result in [1, 2, 3]
+        # queue should be in same order as self.listens after sorting (but a deque)
         self.client._sort_queue()
-        self.assertEqual(self.client.queue, deque([first, second, third]))
+        expected = deque(self.listens)
+        self.assertEqual(self.client.queue, expected)
 
-    def test_increase_delay(self):
+    def test_in_case_of_failure(self):
+        """
+        Test legacy_scrobbler.client.ScrobblerClient._in_case_of_failure()
+
+        The method should:
+        - increase failure counter
+        - call ScrobblerClient._increase_delay()
+        - set internal state to "no_session" if failure counter >= 3
+        """
+        # assert initial state of zero failures, zero delay
+        self.assertEqual(self.client.hard_fails, 0)
         self.assertEqual(self.client.delay, 0)
 
-        # delay should be doubled on every increase
+        # should increase failure counter
+        self.client._in_case_of_failure()
+        self.assertEqual(self.client.hard_fails, 1)
+
+        # should call _increase_delay()
+        # mocking _increase_delay to assure that it was called
+        with patch.object(ScrobblerClient, "_increase_delay") as mock_method:
+            self.client._in_case_of_failure()
+            mock_method.assert_called()
+
+        # should set internal state to "no_session" if failure counter >= 3
+        # setting initial state to something else
+        self.client.state = "idle"
+        self.client.hard_fails = 23
+        self.client._in_case_of_failure()
+        self.assertEqual(self.client.state, "no_session")
+
+        # reset
+        self.client.hard_fails = 0
+        self.client.delay = 0
+
+    def test_increase_delay(self):
+        """
+        Tests legacy_scrobbler.client.ScrobblerClient._increase_delay()
+
+        Per protocol: "If a hard failure occurs at the handshake phase, the
+        client should initially pause for 1 minute before handshaking again.
+        Subsequent failed handshakes should double this delay up to a maximum
+        delay of 120 minutes."
+        https://www.last.fm/api/submissions
+        """
+        # delay should be zero in the beginning
+        self.assertEqual(self.client.delay, 0)
+
+        # increasing the delay should first result in one minute delay and
+        # then double with every increase
         for minute in [1, 2, 4, 8, 16, 32, 64]:
             self.client._increase_delay()
             self.assertEqual(self.client.delay, minute * 60)
