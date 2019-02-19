@@ -4,14 +4,17 @@ import logging
 
 from legacy_scrobbler.exceptions import HandshakeError, HardFailureError
 from legacy_scrobbler.listen import Listen
+from legacy_scrobbler.network import Network
 
 
 logger = logging.getLogger("legacy_scrobbler")
 
 
-class ScrobblerClient:
-    def __init__(self, network):
-        self.network = network
+class ScrobblerClient(Network):
+    def __init__(
+        self, name: str, username: str, password_hash: str, handshake_url: str
+    ):
+        super().__init__(name, username, password_hash, handshake_url)
 
         self.state = "no_session"
         self.delay = 0
@@ -31,7 +34,7 @@ class ScrobblerClient:
     def _execute_handshake(self):
         try:
             self.state = "handshaking"
-            self.network.handshake()
+            self.handshake()
         except HandshakeError as e:
             # that's a fatal error and can't be handled
             logger.error(f"Fatal error during handshake phase: {e}")

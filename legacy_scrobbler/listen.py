@@ -47,7 +47,7 @@ class Listen:
             "m": self.mb_trackid or "",
         }
 
-    def submit_params(self, idx=0):
+    def scrobble_params(self, idx=0):
         return {
             f"a[{idx}]": self.artist_name,
             f"t[{idx}]": self.track_title,

@@ -5,18 +5,60 @@ from unittest.mock import patch, PropertyMock
 
 from legacy_scrobbler.client import ScrobblerClient
 from legacy_scrobbler.listen import Listen
-from legacy_scrobbler import Network
 
 
 class ScrobblerClientTests(unittest.TestCase):
     def setUp(self):
-        self.network = Network(
+        self.client = ScrobblerClient(
             name="ScrobblerNetwork",
             username="testuser",
             password_hash="3858f62230ac3c915f300c664312c63f",
             handshake_url="http://somescrobblernetwork.com/handshake",
         )
-        self.client = ScrobblerClient(self.network)
+
+    def test_enqueue(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        first = Listen(
+            date=now - datetime.timedelta(minutes=10),
+            artist_name="Artist",
+            track_title="Track",
+        )
+
+        second = Listen(
+            date=now - datetime.timedelta(minutes=8),
+            artist_name="Artist",
+            track_title="Track",
+        )
+
+        third = Listen(
+            date=now - datetime.timedelta(minutes=6),
+            artist_name="Artist",
+            track_title="Track",
+        )
+
+        fourth = Listen(
+            date=now - datetime.timedelta(minutes=4),
+            artist_name="Artist",
+            track_title="Track",
+        )
+
+        fifth = Listen(
+            date=now - datetime.timedelta(minutes=2),
+            artist_name="Artist",
+            track_title="Track",
+        )
+
+        # initialize queue as [2, 4]
+        self.client.queue = deque([second, fourth])
+
+        # enqueue other listens
+        self.client.enqueue_listens(third, fifth, first)
+
+        # queue should be [1, 2, 3, 4, 5] now
+        self.assertEqual(
+            self.client.queue, deque([first, second, third, fourth, fifth])
+        )
 
     def test_allowed_to_handshake(self):
         # patch _time_to_next_handshake method to always return a delta of

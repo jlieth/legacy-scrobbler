@@ -50,7 +50,7 @@ class ListenTests(unittest.TestCase):
 
     def test_submit_params(self):
         self.assertEqual(
-            self.listen.submit_params(),
+            self.listen.scrobble_params(),
             {
                 "a[0]": "Artist",
                 "t[0]": "Track",
@@ -65,7 +65,7 @@ class ListenTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            self.listen_with_all_info.submit_params(idx=10),
+            self.listen_with_all_info.scrobble_params(idx=10),
             {
                 "a[10]": "Artist",
                 "t[10]": "Track",
