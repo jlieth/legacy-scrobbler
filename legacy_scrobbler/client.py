@@ -1,14 +1,25 @@
 from collections import deque
 import datetime
+import itertools
 import logging
-from typing import Iterable
+from typing import Callable, Iterable, Union
 
-from legacy_scrobbler.exceptions import HandshakeError, HardFailureError, RequestsError
+from legacy_scrobbler.exceptions import (
+    HandshakeError,
+    HardFailureError,
+    RequestsError,
+    BadSessionError,
+    SubmissionWithoutListensError,
+)
 from legacy_scrobbler.listen import Listen
 from legacy_scrobbler.network import Network
 
 
 logger = logging.getLogger("legacy_scrobbler")
+
+# types
+Listens = Iterable[Listen]
+Listen_or_list_of_Listens = Union[Listens, Listen]
 
 
 class ScrobblerClient(Network):
@@ -42,6 +53,7 @@ class ScrobblerClient(Network):
         self.hard_fails = 0
         self.last_handshake = None
         self.queue = deque()
+        self.np = None
 
     def tick(self):
         """
@@ -52,11 +64,80 @@ class ScrobblerClient(Network):
         can be either successful or failed so on the next tick, the internal
         state might still be "no_session" (on failure) or "idle" (on success).
         """
+
+        def on_successful_handshake():
+            """
+            Callback after a successful handshake request. Resets hard failure
+            counter and delay, and sets self.state to idle.
+            """
+            self.hard_fails = 0
+            self.delay = 0
+            self.state = "idle"
+            logger.info(f"Handshake successful. Received session id {self.session}")
+
+        def after_handshake_attempt():
+            """
+            Callback after handshake attempt (regardless of success). Sets
+            self.last_handshake to current datetime
+            """
+            self.last_handshake = datetime.datetime.now(datetime.timezone.utc)
+
+        def on_successful_nowplaying():
+            """
+            Callback after a successful nowplaying request. Sets self.np back
+            to None.
+            """
+            self.np = None
+            logger.info("Nowplaying successful")
+
+        def on_successful_scrobble():
+            """
+            Callback after a successful scrobble request. Each scrobble request
+            can submit 50 scrobbles at once. After a successful scrobble, we
+            can assume that the first 50 scrobbles in queue have been submitted
+            and can be removed from the queue.
+            """
+            self.queue = deque(itertools.islice(self.queue, 50, None))
+            logger.info(
+                f"Scrobbling successful. Length of remaining queue "
+                f"is now {len(self.queue)}"
+            )
+
+        # if no session exists and handshake attempt is allowed right now,
+        # execute handshake
         if self.state == "no_session" and self._allowed_to_handshake:
             logger.info("Executing handshake attempt")
-            self._execute_handshake()
+            self._execute_request(
+                method=self.handshake,
+                else_cb=on_successful_handshake,
+                finally_cb=after_handshake_attempt,
+            )
 
-    def enqueue_listens(self, listens: Iterable[Listen]):
+        # if state is idle, check if a nowplaying request should be made
+        elif self.state == "idle" and self.np is not None:
+            logger.info("Executing nowplaying attempt")
+            self._execute_request(
+                method=self.nowplaying, else_cb=on_successful_nowplaying, arg=self.np
+            )
+
+        # if state is idle, check if any scrobbles are queued
+        elif self.state == "idle" and len(self.queue) > 0:
+            logger.info("Executing scrobbling attempt")
+            scrobble_slice = deque(itertools.islice(self.queue, 0, 50))
+            self._execute_request(
+                method=self.scrobble, else_cb=on_successful_scrobble, arg=scrobble_slice
+            )
+
+    def set_nowplaying(self, listen: Listen):
+        """
+        Sets the given Listen as the nowplaying track. Nowplaying request
+        will be send on the next tick (when self.state is "idle").
+
+        :param listen: Listen object
+        """
+        self.np = listen
+
+    def enqueue_listens(self, listens: Listens):
         """
         Adds the given Listen objects to the queue so they can be scrobbled
         on the next tick (when scrobbling is possible).
@@ -66,38 +147,80 @@ class ScrobblerClient(Network):
         self.queue.extend(listens)
         self._sort_queue()
 
-    def _execute_handshake(self):
+    def _execute_request(
+        self,
+        method: Callable,
+        else_cb: Callable = None,
+        finally_cb: Callable = None,
+        arg: Listen_or_list_of_Listens = None,
+    ):
         """
-        Calls self.handshake(), catching any exceptions that might occur
-        and setting the internal state depending on the outcome.
+        Executes the given request method with the given arg and adds exception
+        handling. Request method has to be either self.handshake,
+        self.nowplaying or self.scrobble
+
+        Catches all exceptions that can be raised by any of the methods.
+        List of possible exceptions:
+        - raised by all methods: HardFailureError and RequestsError
+        - only raised by handshake: HandshakeError (with three Exceptions
+          inheriting from it but catching this exception is all we need to do)
+        - only raised by nowplaying and scrobble: BadSessionError and
+          SubmissionWithoutListensError
+
+        :param method: Callable. One of self.handshake, self.nowplaying and
+            self.scrobble
+        :param else_cb: Callable. Function that will be called in the else
+            block of the try/except/else/finally construct (i.e. actions to be
+            taken on successful completion of the request). No arguments.
+        :param finally_cb: Callable. Function that will be called in the finally
+            block of the try/except/else/finally construct (i.e. actions to be
+            taken regardless of success of the request, such as cleanup tasks).
+            No arguments.
+        :param arg: One Listen object if method is nowplaying, list of Listen
+            objects if method is scrobble, None if method is handshake
         """
+        assert method in [self.handshake, self.nowplaying, self.scrobble]
+        req_type = method.__name__
+
         try:
-            self.handshake()
-        except HandshakeError as e:
-            # that's a fatal error and can't be handled
-            logger.error(f"Fatal error during handshake phase: {e}")
-            raise
+            method(arg) if arg else method()
         except HardFailureError as e:
-            # hard failures are not fatal. self._in_case_of_failure increases
-            # failure counter and delay for next handshake attempts
-            logger.warning(f"Hard failure during handshake attempt: {e}.")
+            # raised by any of the three methods. non-fatal, just call
+            # _in_case_of_failure to increment failure counter and delay
+            logger.warning(f"Hard failure during {req_type} attempt: {e}.")
             self._in_case_of_failure()
         except RequestsError as e:
-            # requests exceptions are not fatal (for now).
-            # self._in_case_of_failure increases failure counter and delay
-            # for next handshake attempts
-            logger.error(f"Requests Exception during handshake attempt: {e}")
+            # raised by any of the three methods. non-fatal (for now), just
+            # call _in_case_of_failure to increment failure counter and delay
+            logger.error(f"Requests Exception during {req_type} attempt: {e}")
             self._in_case_of_failure()
+        except BadSessionError as e:
+            # session id is invalid, client should re-handshake on next tick
+            logger.warning(
+                f"{e}. self.session is {self.session}. Falling back to handshake phase"
+            )
+            self.state = "no_session"
+            self.session = None
+        except HandshakeError as e:
+            # raised during handshake. fatal error, re-raise
+            logger.error(f"Fatal error during {req_type} attempt: {e}")
+            raise
+        except SubmissionWithoutListensError:
+            # Your friendly neighbourhood programmer has messed up somewhere.
+            # Please file a bug report or something.
+            msg = (
+                "You tried to make a submission without any Listen objects. "
+                "There's an error somewhere in the calling code that made "
+                "the request."
+            )
+            logger.error(msg)
+            raise
         else:
-            # reset failure counter and delay on successful handshake and
-            # set state to idle
-            self.hard_fails = 0
-            self.delay = 0
-            self.state = "idle"
-            logger.info("Handshake successful.")
+            if else_cb:
+                else_cb()
         finally:
-            # set last handshake time to now regardless of success
-            self.last_handshake = datetime.datetime.now(datetime.timezone.utc)
+            if finally_cb:
+                finally_cb()
 
     @property
     def _allowed_to_handshake(self) -> bool:

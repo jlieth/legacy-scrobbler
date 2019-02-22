@@ -57,7 +57,7 @@ class ListenTests(unittest.TestCase):
                 "i[0]": self.timestamp,
                 "o[0]": "P",
                 "r[0]": "",
-                "l[0]": "",
+                "l[0]": 0,
                 "b[0]": "",
                 "n[0]": "",
                 "m[0]": "",

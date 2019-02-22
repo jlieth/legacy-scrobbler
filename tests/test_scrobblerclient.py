@@ -2,10 +2,17 @@ from collections import deque
 import datetime
 import random
 import unittest
-from unittest.mock import patch, PropertyMock
+from unittest.mock import patch, Mock, PropertyMock
 
 from legacy_scrobbler.client import ScrobblerClient
 from legacy_scrobbler.listen import Listen
+from legacy_scrobbler.exceptions import (
+    HardFailureError,
+    RequestsError,
+    BadSessionError,
+    HandshakeError,
+    SubmissionWithoutListensError,
+)
 
 
 class ScrobblerClientTests(unittest.TestCase):
@@ -71,6 +78,111 @@ class ScrobblerClientTests(unittest.TestCase):
 
         # queue should be in same order [1, 2, 3, 4, 5] as self.listens now
         self.assertEqual(self.client.queue, deque(self.listens))
+
+    @patch.object(ScrobblerClient, "_in_case_of_failure")
+    @patch.object(ScrobblerClient, "handshake")
+    def test_execute_handshake(self, mocked_handshake, mocked_in_case_of_failure):
+        """
+        Tests legacy_scrobbler.client.ScrobblerClient._execute_request()
+
+        The method ScrobblerClient._in_case_of_failure() is used a couple of
+        times during _execute_request() and is being mocked during this test
+        in order to check that it actually is being called.
+
+        _execute_request() takes a callable as its first argument. The argument
+        function is used to make the actual request. The argument callable can
+        only be handshake, nowplaying or scrobble. During this test, the
+        argument function needs to be a dummy function so we can determine
+        the desired behaviour. However, since the input callable needs to be
+        one of the mentioned methods, we'll need to mock one of those functions
+        instead of just passing in a dummy function.
+
+        Situations tested:
+        - if the input callable raises a HardFailureError, _in_case_of_failure
+          should be called
+        - if the input callable raises a RequestsError, _in_case_of_failure
+          should be called
+        - if the input callable raises a BadSessionError, session should be
+          unset and state set to "no_session"
+        - if the input callable raises a HandshakeError, the same error should
+          be re-raised
+        - if the input callable raises a SubmissionWithoutListensError, the
+          same error should be re-raised
+        - on a successful request, the else_cb should be called
+        - on an unsuccessful request, the else_cb should not be called
+        - the finally_cb should be called on both a successful and an
+          unsuccessful request
+
+        :param mocked_handshake: Mock method of handshake
+        :param mocked_in_case_of_failure: Mock method of _in_case_of_failure()
+        """
+        # we have to set function __name__ on the mocked handshake
+        mocked_handshake.__name__ = "handshake"
+
+        # if the input callable raises a HardFailureError, _in_case_of_failure
+        # should be called
+        mocked_handshake.side_effect = HardFailureError()
+        self.client._execute_request(method=self.client.handshake)
+        mocked_in_case_of_failure.assert_called()
+        mocked_in_case_of_failure.reset_mock()
+
+        # if the input callable raises a RequestsError, _in_case_of_failure
+        # should be called
+        mocked_handshake.side_effect = RequestsError()
+        self.client._execute_request(method=self.client.handshake)
+        mocked_in_case_of_failure.assert_called()
+        mocked_in_case_of_failure.reset_mock()
+
+        # if the input callable raises a BadSessionError, session should be
+        # unset and state set to "no_session"
+        mocked_handshake.side_effect = BadSessionError()
+        self.client._execute_request(method=self.client.handshake)
+        self.assertIsNone(self.client.session)
+        self.assertEqual(self.client.state, "no_session")
+
+        # if the input callable raises a HandshakeError, the same error should
+        # be re-raised
+        mocked_handshake.side_effect = HandshakeError()
+        self.assertRaises(
+            HandshakeError, self.client._execute_request, method=self.client.handshake
+        )
+
+        # if the input callable raises a SubmissionWithoutListensError, the
+        # same error should be re-raised
+        mocked_handshake.side_effect = SubmissionWithoutListensError()
+        self.assertRaises(
+            SubmissionWithoutListensError,
+            self.client._execute_request,
+            method=self.client.handshake,
+        )
+
+        # on a successful request, the else_cb should be called
+        else_cb = Mock()
+        mocked_handshake.side_effect = None
+        self.client._execute_request(method=self.client.handshake, else_cb=else_cb)
+        else_cb.assert_called()
+
+        # on an unsuccessful request, the else_cb should not be called
+        else_cb = Mock()
+        mocked_handshake.side_effect = HardFailureError()
+        self.client._execute_request(method=self.client.handshake, else_cb=else_cb)
+        else_cb.assert_not_called()
+
+        # the finally_cb should be called on both a successful and an
+        # unsuccessful request
+        finally_cb = Mock()
+        mocked_handshake.side_effect = None
+        self.client._execute_request(
+            method=self.client.handshake, finally_cb=finally_cb
+        )
+        finally_cb.assert_called()
+        finally_cb.reset_mock()
+
+        mocked_handshake.side_effect = HardFailureError()
+        self.client._execute_request(
+            method=self.client.handshake, finally_cb=finally_cb
+        )
+        finally_cb.assert_called()
 
     def test_allowed_to_handshake(self):
         """

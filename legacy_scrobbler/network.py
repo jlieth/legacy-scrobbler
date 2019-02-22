@@ -164,7 +164,7 @@ class Network:
         """
         # raise Exception if no session exists at this point
         if self.session is None:
-            raise BadSessionError()
+            raise BadSessionError("No session exists at time of submission attempt")
 
         # raise exception if list of listens is empty
         if not listens or len(listens) == 0:
@@ -242,7 +242,7 @@ class Network:
         if r.text.startswith("OK"):
             return
         elif r.text.startswith("BADSESSION"):
-            raise BadSessionError()
+            raise BadSessionError("Remote server says the session is invalid")
         else:
             raise HardFailureError(r.text)
 

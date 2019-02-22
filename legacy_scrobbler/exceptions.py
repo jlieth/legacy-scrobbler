@@ -94,10 +94,6 @@ class BadSessionError(LegacyScrobblerNonFatalException):
     handled by the calling code by falling back to the handshake phase.
     """
 
-    def __init__(self):
-        msg = "No session exists"
-        super().__init__(msg)
-
 
 class UsageException(LegacyScrobblerFatalException):
     """

@@ -54,7 +54,7 @@ class Listen:
             f"i[{idx}]": self.timestamp,
             f"o[{idx}]": self.source,
             f"r[{idx}]": self.rating or "",
-            f"l[{idx}]": self.length or "",
+            f"l[{idx}]": self.length or 0,
             f"b[{idx}]": self.album_title or "",
             f"n[{idx}]": self.tracknumber or "",
             f"m[{idx}]": self.mb_trackid or "",
