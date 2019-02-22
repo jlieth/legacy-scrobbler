@@ -14,10 +14,8 @@ matrix:
       env: TOXENV=style
     - python: 3.6
       env: TOXENV=codecov
-  allow_failures:
     - python: 3.6
       env: TOXENV=coveralls
-  fast_finish: true
 
 script: tox
 
