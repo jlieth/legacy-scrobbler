@@ -64,60 +64,23 @@ class ScrobblerClient(Network):
         can be either successful or failed so on the next tick, the internal
         state might still be "no_session" (on failure) or "idle" (on success).
         """
-
-        def on_successful_handshake():
-            """
-            Callback after a successful handshake request. Resets hard failure
-            counter and delay, and sets self.state to idle.
-            """
-            self.hard_fails = 0
-            self.delay = 0
-            self.state = "idle"
-            logger.info(f"Handshake successful. Received session id {self.session}")
-
-        def after_handshake_attempt():
-            """
-            Callback after handshake attempt (regardless of success). Sets
-            self.last_handshake to current datetime
-            """
-            self.last_handshake = datetime.datetime.now(datetime.timezone.utc)
-
-        def on_successful_nowplaying():
-            """
-            Callback after a successful nowplaying request. Sets self.np back
-            to None.
-            """
-            self.np = None
-            logger.info("Nowplaying successful")
-
-        def on_successful_scrobble():
-            """
-            Callback after a successful scrobble request. Each scrobble request
-            can submit 50 scrobbles at once. After a successful scrobble, we
-            can assume that the first 50 scrobbles in queue have been submitted
-            and can be removed from the queue.
-            """
-            self.queue = deque(itertools.islice(self.queue, 50, None))
-            logger.info(
-                f"Scrobbling successful. Length of remaining queue "
-                f"is now {len(self.queue)}"
-            )
-
         # if no session exists and handshake attempt is allowed right now,
         # execute handshake
         if self.state == "no_session" and self._allowed_to_handshake:
             logger.info("Executing handshake attempt")
             self._execute_request(
                 method=self.handshake,
-                else_cb=on_successful_handshake,
-                finally_cb=after_handshake_attempt,
+                else_cb=self.on_successful_handshake_cb,
+                finally_cb=self.on_handshake_attempt_cb,
             )
 
         # if state is idle, check if a nowplaying request should be made
         elif self.state == "idle" and self.np is not None:
             logger.info("Executing nowplaying attempt")
             self._execute_request(
-                method=self.nowplaying, else_cb=on_successful_nowplaying, arg=self.np
+                method=self.nowplaying,
+                else_cb=self.on_successful_nowplaying_cb,
+                arg=self.np,
             )
 
         # if state is idle, check if any scrobbles are queued
@@ -125,7 +88,9 @@ class ScrobblerClient(Network):
             logger.info("Executing scrobbling attempt")
             scrobble_slice = deque(itertools.islice(self.queue, 0, 50))
             self._execute_request(
-                method=self.scrobble, else_cb=on_successful_scrobble, arg=scrobble_slice
+                method=self.scrobble,
+                else_cb=self.on_successful_scrobble_cb,
+                arg=scrobble_slice,
             )
 
     def set_nowplaying(self, listen: Listen):
@@ -298,3 +263,41 @@ class ScrobblerClient(Network):
 
         if self.delay > 120 * 60:
             self.delay = 120 * 60
+
+    def on_handshake_attempt_cb(self):
+        """
+        Callback after handshake attempt (regardless of success). Sets
+        self.last_handshake to current datetime
+        """
+        self.last_handshake = datetime.datetime.now(datetime.timezone.utc)
+
+    def on_successful_handshake_cb(self):
+        """
+        Callback after a successful handshake request. Resets hard failure
+        counter and delay, and sets self.state to idle.
+        """
+        self.hard_fails = 0
+        self.delay = 0
+        self.state = "idle"
+        logger.info(f"Handshake successful. Received session id {self.session}")
+
+    def on_successful_nowplaying_cb(self):
+        """
+        Callback after a successful nowplaying request. Sets self.np back
+        to None.
+        """
+        self.np = None
+        logger.info("Nowplaying successful")
+
+    def on_successful_scrobble_cb(self):
+        """
+        Callback after a successful scrobble request. Each scrobble request
+        can submit 50 scrobbles at once. After a successful scrobble, we
+        can assume that the first 50 scrobbles in queue have been submitted
+        and can be removed from the queue.
+        """
+        self.queue = deque(itertools.islice(self.queue, 50, None))
+        logger.info(
+            f"Scrobbling successful. Length of remaining queue "
+            f"is now {len(self.queue)}"
+        )

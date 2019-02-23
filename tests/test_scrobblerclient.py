@@ -58,6 +58,120 @@ class ScrobblerClientTests(unittest.TestCase):
             ),
         ]
 
+    @patch.object(ScrobblerClient, "_allowed_to_handshake", new_callable=PropertyMock)
+    @patch.object(ScrobblerClient, "_execute_request")
+    def test_tick(
+        self, mocked_execute_request: Mock, mocked_allowed_to_handshake: Mock
+    ):
+        """
+        Tests legacy_scrobbler.client.ScrobblerClient.tick()
+
+        The method ScrobblerClient._allowed_to_handshake() is mocked during
+        this test to simulate a specific program state without having to
+        calculate the last_handshake times.
+
+        The method ScrobblerClient._execute_request() is mocked during this
+        test to determine if tick() has called the method and which arguments
+        were given to it.
+
+        Situations tested:
+        - if self.state is "no_session" but _allowed_to_handshake returns
+          False, nothing should happen (that is, _execute_request should not
+          be called)
+        - if self.state is "idle" and neither self.np is set nor self.queue
+          contains any listens, nothing should happen (that is,
+          _execute_request should not be called)
+        - if self.state is "no_session" and _allowed_to_handshake returns True,
+          execute_request should be called with the arguments:
+            method=self.handshake
+            else_cb=self.on_successful_handshake_cb
+            finally_cb=self.on_handshake_attempt_cb
+        - if self.state is "idle" and self.np is set, _execute_request should
+          be called with the arguments:
+            method=self.nowplaying
+            else_cb=self.on_successful_nowplaying_cb
+            arg=self.np
+        - if self.state is "idle" and self.queue contains listens,
+          _execute_request should be called with the arguments:
+            method=self.scrobble
+            else_cb=self.on_successful_scrobble_cb
+            arg=deque(list(self.queue)[:50])
+
+
+        :param mocked_execute_request: Mock method of _execute_request
+        :param mocked_allowed_to_handshake:Mock method of _allowed_to_handshake
+        """
+
+        # if self.state is "no_session" but _allowed_to_handshake returns
+        # False, nothing should happen (that is, _execute_request should not
+        # be called)
+        self.client.state = "no_session"
+        mocked_allowed_to_handshake.return_value = False
+        self.client.tick()
+        mocked_execute_request.assert_not_called()
+
+        # if self.state is "idle" and neither self.np is set nor self.queue
+        # contains any listens, nothing should happen (that is,
+        # _execute_request should not be called)
+        self.client.state = "idle"
+        self.client.np = None
+        self.client.queue.clear()
+        self.client.tick()
+        mocked_execute_request.assert_not_called()
+
+        # if self.state is "no_session" and _allowed_to_handshake returns True,
+        # execute_request should be called with the arguments
+        #   method=self.handshake
+        #   else_cb=self.on_successful_handshake_cb
+        #   finally_cb=self.on_handshake_attempt_cb
+        self.client.state = "no_session"
+        mocked_allowed_to_handshake.return_value = True
+        self.client.tick()
+        mocked_execute_request.assert_called_with(
+            method=self.client.handshake,
+            else_cb=self.client.on_successful_handshake_cb,
+            finally_cb=self.client.on_handshake_attempt_cb,
+        )
+        mocked_execute_request.reset_mock()
+
+        # if self.state is "idle" and self.np is set, execute_request should
+        # be called with the arguments:
+        #   method=self.nowplaying
+        #   else_cb=self.on_successful_nowplaying_cb
+        #   arg=self.np
+        self.client.state = "idle"
+        self.client.np = self.listens[0]
+        self.client.tick()
+        mocked_execute_request.assert_called_with(
+            method=self.client.nowplaying,
+            else_cb=self.client.on_successful_nowplaying_cb,
+            arg=self.client.np,
+        )
+        # unset self.client.np
+        self.client.np = None
+
+        # if self.state is "idle" and self.queue contains listens,
+        # _execute_request should be called with the arguments:
+        #   method=self.scrobble
+        #   else_cb=self.on_successful_scrobble_cb
+        #   arg=deque(list(self.queue)[:50])
+        self.client.state = "idle"
+        self.client.enqueue_listens(self.listens)
+        self.client.tick()
+        mocked_execute_request.assert_called_with(
+            method=self.client.scrobble,
+            else_cb=self.client.on_successful_scrobble_cb,
+            arg=deque(list(self.client.queue)[:50]),
+        )
+
+    def test_set_nowplaying(self):
+        """Tests legacy_scrobbler.client.ScrobblerClient.set_nowplaying()"""
+        self.client.set_nowplaying(self.listens[0])
+        self.assertEqual(self.client.np, self.listens[0])
+
+        # unset np
+        self.client.np = None
+
     def test_enqueue(self):
         """
         Tests legacy_scrobbler.client.ScrobblerClient.enqueue_listens()
