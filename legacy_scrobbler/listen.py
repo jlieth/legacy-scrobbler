@@ -39,6 +39,23 @@ class Listen:
 
         self.validate_date()
 
+    def __str__(self) -> str:
+        """
+        >>> import datetime
+        >>> d = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+        >>> l = Listen(d, "Artist", "Track", length=111)
+        >>> print(l)
+        [2000-01-01 00:00:00+00:00] Artist - Track (1:51)
+        """
+        s = "[{}] {} - {} ({}:{:02})".format(
+            self.date,
+            self.artist_name,
+            self.track_title,
+            int(self.length / 60),
+            self.length % 60,
+        )
+        return s
+
     def validate_date(self):
         """
         Checks whether self.date is timezone-aware.
