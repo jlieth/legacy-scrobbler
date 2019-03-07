@@ -4,7 +4,7 @@ import random
 import unittest
 from unittest.mock import patch, Mock, PropertyMock
 
-from legacy_scrobbler.client import ScrobblerClient
+from legacy_scrobbler.clients.legacy import LegacyScrobbler
 from legacy_scrobbler.listen import Listen
 from legacy_scrobbler.exceptions import (
     HardFailureError,
@@ -16,11 +16,11 @@ from legacy_scrobbler.exceptions import (
 
 
 class ScrobblerClientTests(unittest.TestCase):
-    """Tests for legavy_scrobbler.client.ScrobblerClient"""
+    """Tests for legacy_scrobbler.client.LegacyScrobbler"""
 
     def setUp(self):
         # create client
-        self.client = ScrobblerClient(
+        self.client = LegacyScrobbler(
             name="ScrobblerNetwork",
             username="testuser",
             password_hash="3858f62230ac3c915f300c664312c63f",
@@ -58,19 +58,19 @@ class ScrobblerClientTests(unittest.TestCase):
             ),
         ]
 
-    @patch.object(ScrobblerClient, "_allowed_to_handshake", new_callable=PropertyMock)
-    @patch.object(ScrobblerClient, "_execute_request")
+    @patch.object(LegacyScrobbler, "_allowed_to_handshake", new_callable=PropertyMock)
+    @patch.object(LegacyScrobbler, "_execute_request")
     def test_tick(
         self, mocked_execute_request: Mock, mocked_allowed_to_handshake: Mock
     ):
         """
-        Tests legacy_scrobbler.client.ScrobblerClient.tick()
+        Tests legacy_scrobbler.client.LegacyScrobbler.tick()
 
-        The method ScrobblerClient._allowed_to_handshake() is mocked during
+        The method LegacyScrobbler._allowed_to_handshake() is mocked during
         this test to simulate a specific program state without having to
         calculate the last_handshake times.
 
-        The method ScrobblerClient._execute_request() is mocked during this
+        The method LegacyScrobbler._execute_request() is mocked during this
         test to determine if tick() has called the method and which arguments
         were given to it.
 
@@ -156,7 +156,7 @@ class ScrobblerClientTests(unittest.TestCase):
         #   else_cb=self.on_successful_scrobble_cb
         #   arg=deque(list(self.queue)[:50])
         self.client.state = "idle"
-        self.client.enqueue_listens(self.listens)
+        self.client.add_listens(self.listens)
         self.client.tick()
         mocked_execute_request.assert_called_with(
             method=self.client.scrobble,
@@ -165,8 +165,8 @@ class ScrobblerClientTests(unittest.TestCase):
         )
 
     def test_set_nowplaying(self):
-        """Tests legacy_scrobbler.client.ScrobblerClient.set_nowplaying()"""
-        self.client.set_nowplaying(self.listens[0])
+        """Tests legacy_scrobbler.client.LegacyScrobbler.send_nowplaying()"""
+        self.client.send_nowplaying(self.listens[0])
         self.assertEqual(self.client.np, self.listens[0])
 
         # unset np
@@ -174,10 +174,10 @@ class ScrobblerClientTests(unittest.TestCase):
 
     def test_enqueue(self):
         """
-        Tests legacy_scrobbler.client.ScrobblerClient.enqueue_listens()
+        Tests legacy_scrobbler.client.LegacyScrobbler.add_listens()
 
         Uses some listens from self.listens as initial queue, shuffles the
-        list of other listens and calls enqueue_listens() with the shuffled
+        list of other listens and calls add_listens() with the shuffled
         list. Resulting queue should be in chronological order (same as
         self.listens, just as a deque).
         """
@@ -188,18 +188,18 @@ class ScrobblerClientTests(unittest.TestCase):
         # enqueue other listens in order [3, 5, 1]
         others = [self.listens[0], self.listens[2], self.listens[4]]
         random.shuffle(others)
-        self.client.enqueue_listens(others)
+        self.client.add_listens(others)
 
         # queue should be in same order [1, 2, 3, 4, 5] as self.listens now
         self.assertEqual(self.client.queue, deque(self.listens))
 
-    @patch.object(ScrobblerClient, "_in_case_of_failure")
-    @patch.object(ScrobblerClient, "handshake")
+    @patch.object(LegacyScrobbler, "_in_case_of_failure")
+    @patch.object(LegacyScrobbler, "handshake")
     def test_execute_handshake(self, mocked_handshake, mocked_in_case_of_failure):
         """
-        Tests legacy_scrobbler.client.ScrobblerClient._execute_request()
+        Tests legacy_scrobbler.client.LegacyScrobbler._execute_request()
 
-        The method ScrobblerClient._in_case_of_failure() is used a couple of
+        The method LegacyScrobbler._in_case_of_failure() is used a couple of
         times during _execute_request() and is being mocked during this test
         in order to check that it actually is being called.
 
@@ -300,11 +300,11 @@ class ScrobblerClientTests(unittest.TestCase):
 
     def test_allowed_to_handshake(self):
         """
-        Tests legacy_scrobbler.client.ScrobblerClient._allowed_to_handshake
+        Tests legacy_scrobbler.client.LegacyScrobbler._allowed_to_handshake
         in two circumstances:
-        - If ScrobblerClient._time_to_next_handshake returns a timedelta
+        - If LegacyScrobbler._time_to_next_handshake returns a timedelta
           of zero, _allowed_to_handshake() should return True.
-        - If ScrobblerClient._time_to_next_handshake returns a timedelta
+        - If LegacyScrobbler._time_to_next_handshake returns a timedelta
           greater than zero, _allowed_to_handshake should return False.
 
         The test mocks _time_to_next_handshake in order to create the two
@@ -313,7 +313,7 @@ class ScrobblerClientTests(unittest.TestCase):
         # patch _time_to_next_handshake method to always return a delta of
         # zero. _allowed_to_handshake should return True in this case.
         with patch.object(
-            ScrobblerClient,
+            LegacyScrobbler,
             "_time_to_next_handshake",
             new_callable=PropertyMock,
             return_value=datetime.timedelta(seconds=0),
@@ -323,7 +323,7 @@ class ScrobblerClientTests(unittest.TestCase):
         # patch _time_to_next_handshake method to always return a delta greater
         # than zero. _allowed_to_handshake should return False in this case.
         with patch.object(
-            ScrobblerClient,
+            LegacyScrobbler,
             "_time_to_next_handshake",
             new_callable=PropertyMock,
             return_value=datetime.timedelta(seconds=100),
@@ -332,7 +332,7 @@ class ScrobblerClientTests(unittest.TestCase):
 
     def test_time_to_next_handshake(self):
         """
-        Tests legacy_scrobbler.client.ScrobblerClient._test_time_to_next_handshake
+        Tests legacy_scrobbler.client.LegacyScrobbler._test_time_to_next_handshake
         for the four possible expected outcomes:
         - If no delay is set in the client, the method should return a timedelta
           of zero
@@ -377,7 +377,7 @@ class ScrobblerClientTests(unittest.TestCase):
         self.assertTrue(lower_bound <= actual <= upper_bound)
 
     def test_sort_queue(self):
-        """Tests legacy_scrobbler.client.ScrobblerClient._sort_queue()"""
+        """Tests legacy_scrobbler.client.LegacyScrobbler._sort_queue()"""
         # set the shuffled self.listens as queue
         queue = self.listens[:]
         random.shuffle(queue)
@@ -390,11 +390,11 @@ class ScrobblerClientTests(unittest.TestCase):
 
     def test_in_case_of_failure(self):
         """
-        Test legacy_scrobbler.client.ScrobblerClient._in_case_of_failure()
+        Test legacy_scrobbler.client.LegacyScrobbler._in_case_of_failure()
 
         The method should:
         - increase failure counter
-        - call ScrobblerClient._increase_delay()
+        - call LegacyScrobbler._increase_delay()
         - set internal state to "no_session" if failure counter >= 3
         """
         # assert initial state of zero failures, zero delay
@@ -407,7 +407,7 @@ class ScrobblerClientTests(unittest.TestCase):
 
         # should call _increase_delay()
         # mocking _increase_delay to assure that it was called
-        with patch.object(ScrobblerClient, "_increase_delay") as mock_method:
+        with patch.object(LegacyScrobbler, "_increase_delay") as mock_method:
             self.client._in_case_of_failure()
             mock_method.assert_called()
 
@@ -424,7 +424,7 @@ class ScrobblerClientTests(unittest.TestCase):
 
     def test_increase_delay(self):
         """
-        Tests legacy_scrobbler.client.ScrobblerClient._increase_delay()
+        Tests legacy_scrobbler.client.LegacyScrobbler._increase_delay()
 
         Per protocol: "If a hard failure occurs at the handshake phase, the
         client should initially pause for 1 minute before handshaking again.

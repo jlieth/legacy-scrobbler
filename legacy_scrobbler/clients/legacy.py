@@ -2,8 +2,11 @@ from collections import deque
 import datetime
 import itertools
 import logging
-from typing import Callable, Iterable, Union
+from typing import Callable, Union
 
+from legacy_scrobbler.listen import Listen, Listens
+from legacy_scrobbler.network import Network
+from legacy_scrobbler.clients.interface import ScrobbleClientInterface
 from legacy_scrobbler.exceptions import (
     HandshakeError,
     HardFailureError,
@@ -11,18 +14,15 @@ from legacy_scrobbler.exceptions import (
     BadSessionError,
     SubmissionWithoutListensError,
 )
-from legacy_scrobbler.listen import Listen
-from legacy_scrobbler.network import Network
 
 
 logger = logging.getLogger("legacy_scrobbler")
 
 # types
-Listens = Iterable[Listen]
 Listen_or_list_of_Listens = Union[Listens, Listen]
 
 
-class ScrobblerClient(Network):
+class LegacyScrobbler(ScrobbleClientInterface, Network):
     """
     Client-side implementation of the Audioscrobbler protocol 1.2
 
@@ -31,10 +31,10 @@ class ScrobblerClient(Network):
     be called from a main loop.
 
     Instead of calling the nowplaying() and scrobble() methods directly,
-    Listens should be enqueued with the enqueue_listens() method
+    Listens should be enqueued with the add_listens() method
     TODO: nowplaying
 
-    The handshake() method should never be called on ScrobblerClient objects
+    The handshake() method should never be called on LegacyScrobbler objects
     because they manage their internal state automatically.
     """
 
@@ -42,7 +42,7 @@ class ScrobblerClient(Network):
         self, name: str, username: str, password_hash: str, handshake_url: str
     ):
         """
-        Creates a ScrobblerClient object. Inherits from
+        Creates a LegacyScrobbler object. Inherits from
         legacy_scrobbler.network.Network. Arguments are the same. Please
         refer to the Network documentation for details about arguments.
         """
@@ -93,7 +93,7 @@ class ScrobblerClient(Network):
                 arg=scrobble_slice,
             )
 
-    def set_nowplaying(self, listen: Listen):
+    def send_nowplaying(self, listen: Listen):
         """
         Sets the given Listen as the nowplaying track. Nowplaying request
         will be send on the next tick (when self.state is "idle").
@@ -102,7 +102,7 @@ class ScrobblerClient(Network):
         """
         self.np = listen
 
-    def enqueue_listens(self, listens: Listens):
+    def add_listens(self, listens: Listens):
         """
         Adds the given Listen objects to the queue so they can be scrobbled
         on the next tick (when scrobbling is possible).

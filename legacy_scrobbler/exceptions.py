@@ -122,7 +122,7 @@ class SubmissionWithoutListensError(UsageException):
     """
     Raised by Network.scrobble() if called without listens objects as arguments.
     This exception is considered fatal. While calling scrobble without arguments
-    wouldn't in itself lead to any internal error in the ScrobblerClient or
+    wouldn't in itself lead to any internal error in the LegacyScrobbler or
     Network, it's probably a sign that the calling code contains an error.
     """
 

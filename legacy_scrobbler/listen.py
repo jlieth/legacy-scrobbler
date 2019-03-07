@@ -1,5 +1,5 @@
 import datetime
-from typing import Optional
+from typing import Collection, Optional
 
 from legacy_scrobbler.exceptions import DateWithoutTimezoneError
 
@@ -204,3 +204,6 @@ class Listen:
         # reference date to allow for the required play time
         time_between = reference - self.date
         return time_between.seconds >= self.required_play_time
+
+
+Listens = Collection[Listen]
