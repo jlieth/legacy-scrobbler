@@ -1,5 +1,4 @@
 from collections import deque
-import datetime
 import itertools
 import logging
 from typing import Callable, Union
@@ -46,14 +45,16 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
         legacy_scrobbler.network.Network. Arguments are the same. Please
         refer to the Network documentation for details about arguments.
         """
-        super().__init__(name, username, password_hash, handshake_url)
+        ScrobbleClientInterface.__init__(self)
+        Network.__init__(
+            self,
+            name=name,
+            username=username,
+            password_hash=password_hash,
+            handshake_url=handshake_url,
+        )
 
         self.state = "no_session"
-        self.delay = 0
-        self.hard_fails = 0
-        self.last_handshake = None
-        self.queue = deque()
-        self.np = None
 
     def tick(self):
         """
@@ -66,7 +67,7 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
         """
         # if no session exists and handshake attempt is allowed right now,
         # execute handshake
-        if self.state == "no_session" and self._allowed_to_handshake:
+        if self.state == "no_session" and not self.delay.is_active:
             logger.info("Executing handshake attempt")
             self._execute_request(
                 method=self.handshake,
@@ -187,51 +188,6 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
             if finally_cb:
                 finally_cb()
 
-    @property
-    def _allowed_to_handshake(self) -> bool:
-        """
-        Determines whether a handshake attempt is permitted right now.
-
-        :return: bool. Whether or not a handshake attempt is permitted now
-        """
-        time_until = self._time_to_next_handshake
-        if time_until.seconds > 0:
-            logger.info(f"Next handshake attempt allowed in {time_until}")
-            return False
-        else:
-            return True
-
-    @property
-    def _time_to_next_handshake(self) -> datetime.timedelta:
-        """
-        Calculates the time that has to elapse until the next handshake may
-        be attempted.
-
-        Will return a timedelta of zero if self.delay is zero or
-        self.last_handshake is None.
-
-        :return: datetime.timedelta: Timedelta until next handshake is allowed
-        """
-        # if no delay is set, timedelta is zero
-        if self.delay == 0:
-            return datetime.timedelta(seconds=0)
-
-        # if no last_handshake is set, timedelta is zero
-        if self.last_handshake is None:
-            return datetime.timedelta(seconds=0)
-
-        # if the time of the last handshake plus the delay is earlier
-        # than now, timedelta is zero (since no time needs to pass until
-        # the next handshake attempt may be made)
-        delay_delta = datetime.timedelta(seconds=self.delay)
-        next_handshake = self.last_handshake + delay_delta
-        now = datetime.datetime.now(self.last_handshake.tzinfo)
-
-        if next_handshake <= now:
-            return datetime.timedelta(seconds=0)
-        else:
-            return next_handshake - now
-
     def _sort_queue(self):
         """Sorts self.queue by date of listens objects in queue"""
         self.queue = deque(sorted(self.queue, key=lambda listen: listen.date))
@@ -240,36 +196,25 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
         """
         Executes common tasks in case of a request failure.
         - increases hard failure counter
-        - calls self._increase_delay()
+        - calls self.delay.increase()
         - if number of failures >= 3, the client falls back to handshake phase
         """
         self.hard_fails += 1
-        self._increase_delay()
+        self.delay.increase()
         logger.info(f"Number of hard failures is now {self.hard_fails}.")
-        logger.info(f"Delay is now {self.delay} seconds.")
+        logger.info(f"Delay is now {self.delay._seconds} seconds.")
 
         # fall back to handshake phase if failure count >= 3
         if not self.state == "no_session" and self.hard_fails >= 3:
             self.state = "no_session"
             logger.info("Falling back to handshake phase")
 
-    def _increase_delay(self):
-        """
-        Increases self.delay according to Audioscrobbler protocol.
-        Delay starts at zero, first failure results in delay of 1 minute,
-        every consecutive failure doubles the delay up to 120 minutes.
-        """
-        self.delay = (self.delay * 2) or 60
-
-        if self.delay > 120 * 60:
-            self.delay = 120 * 60
-
     def on_handshake_attempt_cb(self):
         """
-        Callback after handshake attempt (regardless of success). Sets
-        self.last_handshake to current datetime
+        Callback after handshake attempt (regardless of success). Calls
+        self.delay.update() to set delay start time to now.
         """
-        self.last_handshake = datetime.datetime.now(datetime.timezone.utc)
+        self.delay.update()
 
     def on_successful_handshake_cb(self):
         """
@@ -277,7 +222,7 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
         counter and delay, and sets self.state to idle.
         """
         self.hard_fails = 0
-        self.delay = 0
+        self.delay.reset()
         self.state = "idle"
         logger.info(f"Handshake successful. Received session id {self.session}")
 

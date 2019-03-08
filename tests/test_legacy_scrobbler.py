@@ -4,6 +4,7 @@ import random
 import unittest
 from unittest.mock import patch, Mock, PropertyMock
 
+from legacy_scrobbler.clients import interface
 from legacy_scrobbler.clients.legacy import LegacyScrobbler
 from legacy_scrobbler.listen import Listen
 from legacy_scrobbler.exceptions import (
@@ -58,30 +59,27 @@ class ScrobblerClientTests(unittest.TestCase):
             ),
         ]
 
-    @patch.object(LegacyScrobbler, "_allowed_to_handshake", new_callable=PropertyMock)
+    @patch.object(interface.Delay, "is_active", new_callable=PropertyMock)
     @patch.object(LegacyScrobbler, "_execute_request")
-    def test_tick(
-        self, mocked_execute_request: Mock, mocked_allowed_to_handshake: Mock
-    ):
+    def test_tick(self, mocked_execute_request: Mock, mocked_is_active: Mock):
         """
         Tests legacy_scrobbler.client.LegacyScrobbler.tick()
 
-        The method LegacyScrobbler._allowed_to_handshake() is mocked during
-        this test to simulate a specific program state without having to
-        calculate the last_handshake times.
+        The property legacy_scrobbler.delay.Delay.is_active is mocked during
+        this test to simulate a specific program state.
 
         The method LegacyScrobbler._execute_request() is mocked during this
         test to determine if tick() has called the method and which arguments
         were given to it.
 
         Situations tested:
-        - if self.state is "no_session" but _allowed_to_handshake returns
-          False, nothing should happen (that is, _execute_request should not
+        - if self.state is "no_session" but delay.is_active returns
+          True, nothing should happen (that is, _execute_request should not
           be called)
         - if self.state is "idle" and neither self.np is set nor self.queue
           contains any listens, nothing should happen (that is,
           _execute_request should not be called)
-        - if self.state is "no_session" and _allowed_to_handshake returns True,
+        - if self.state is "no_session" and delay.is_active returns False,
           execute_request should be called with the arguments:
             method=self.handshake
             else_cb=self.on_successful_handshake_cb
@@ -99,14 +97,14 @@ class ScrobblerClientTests(unittest.TestCase):
 
 
         :param mocked_execute_request: Mock method of _execute_request
-        :param mocked_allowed_to_handshake:Mock method of _allowed_to_handshake
+        :param mocked_is_active: Mock method of delay.is_active
         """
 
-        # if self.state is "no_session" but _allowed_to_handshake returns
-        # False, nothing should happen (that is, _execute_request should not
+        # if self.state is "no_session" but delay.is_active returns
+        # True, nothing should happen (that is, _execute_request should not
         # be called)
         self.client.state = "no_session"
-        mocked_allowed_to_handshake.return_value = False
+        mocked_is_active.return_value = True
         self.client.tick()
         mocked_execute_request.assert_not_called()
 
@@ -119,13 +117,13 @@ class ScrobblerClientTests(unittest.TestCase):
         self.client.tick()
         mocked_execute_request.assert_not_called()
 
-        # if self.state is "no_session" and _allowed_to_handshake returns True,
-        # execute_request should be called with the arguments
+        # if self.state is "no_session" and delay.is_active returns False,
+        # execute_request should be called with the arguments:
         #   method=self.handshake
         #   else_cb=self.on_successful_handshake_cb
         #   finally_cb=self.on_handshake_attempt_cb
         self.client.state = "no_session"
-        mocked_allowed_to_handshake.return_value = True
+        mocked_is_active.return_value = False
         self.client.tick()
         mocked_execute_request.assert_called_with(
             method=self.client.handshake,
@@ -134,7 +132,7 @@ class ScrobblerClientTests(unittest.TestCase):
         )
         mocked_execute_request.reset_mock()
 
-        # if self.state is "idle" and self.np is set, execute_request should
+        # if self.state is "idle" and self.np is set, _execute_request should
         # be called with the arguments:
         #   method=self.nowplaying
         #   else_cb=self.on_successful_nowplaying_cb
@@ -298,84 +296,6 @@ class ScrobblerClientTests(unittest.TestCase):
         )
         finally_cb.assert_called()
 
-    def test_allowed_to_handshake(self):
-        """
-        Tests legacy_scrobbler.client.LegacyScrobbler._allowed_to_handshake
-        in two circumstances:
-        - If LegacyScrobbler._time_to_next_handshake returns a timedelta
-          of zero, _allowed_to_handshake() should return True.
-        - If LegacyScrobbler._time_to_next_handshake returns a timedelta
-          greater than zero, _allowed_to_handshake should return False.
-
-        The test mocks _time_to_next_handshake in order to create the two
-        circumstances that should be tested.
-        """
-        # patch _time_to_next_handshake method to always return a delta of
-        # zero. _allowed_to_handshake should return True in this case.
-        with patch.object(
-            LegacyScrobbler,
-            "_time_to_next_handshake",
-            new_callable=PropertyMock,
-            return_value=datetime.timedelta(seconds=0),
-        ):
-            self.assertTrue(self.client._allowed_to_handshake)
-
-        # patch _time_to_next_handshake method to always return a delta greater
-        # than zero. _allowed_to_handshake should return False in this case.
-        with patch.object(
-            LegacyScrobbler,
-            "_time_to_next_handshake",
-            new_callable=PropertyMock,
-            return_value=datetime.timedelta(seconds=100),
-        ):
-            self.assertFalse(self.client._allowed_to_handshake)
-
-    def test_time_to_next_handshake(self):
-        """
-        Tests legacy_scrobbler.client.LegacyScrobbler._test_time_to_next_handshake
-        for the four possible expected outcomes:
-        - If no delay is set in the client, the method should return a timedelta
-          of zero
-        - If no handshake has happened yet, even if a delay is set, the method
-          should return a timedelta of zero
-        - If a delay is set and the timestamp of a previous handshake is saved,
-          the method should return a timedelta of zero if the last handshake
-          was longer ago than the current delay
-        - If a delay is set and the timestamp of a previous handshake is saved,
-          the method should return a positive timedelta (the remaining time
-          that has to pass until a handshake attempt may be made)
-        """
-        # timedelta on no delay should be zero
-        self.client.delay = 0
-        self.assertEqual(
-            self.client._time_to_next_handshake, datetime.timedelta(seconds=0)
-        )
-
-        # timedelta on no last_handshake should be zero
-        self.client.delay = 8 * 60
-        self.client.last_handshake = None
-        self.assertEqual(
-            self.client._time_to_next_handshake, datetime.timedelta(seconds=0)
-        )
-
-        # test with a delay of eight minutes and last_handshake ten minutes
-        # ago. Delay has passed so result should be a zero timedelta
-        now = datetime.datetime.now(datetime.timezone.utc)
-        self.client.last_handshake = now - datetime.timedelta(minutes=10)
-        self.assertEqual(
-            self.client._time_to_next_handshake, datetime.timedelta(seconds=0)
-        )
-
-        # test with a delay of eight minutes and last timestamp 4 mins 40 secs
-        # ago. Expected value is a timedelta of 3 mins 20 secs. However, the
-        # function call takes som microseconds so the actual value will be
-        # slightly smaller. Actual value should be between 3:19.9 and 3:20
-        self.client.last_handshake = now - datetime.timedelta(minutes=4, seconds=40)
-        actual = self.client._time_to_next_handshake
-        lower_bound = datetime.timedelta(minutes=3, seconds=19.9)
-        upper_bound = datetime.timedelta(minutes=3, seconds=20)
-        self.assertTrue(lower_bound <= actual <= upper_bound)
-
     def test_sort_queue(self):
         """Tests legacy_scrobbler.client.LegacyScrobbler._sort_queue()"""
         # set the shuffled self.listens as queue
@@ -394,12 +314,12 @@ class ScrobblerClientTests(unittest.TestCase):
 
         The method should:
         - increase failure counter
-        - call LegacyScrobbler._increase_delay()
+        - call legacy_scrobbler.delay.Delay.increase()
         - set internal state to "no_session" if failure counter >= 3
         """
         # assert initial state of zero failures, zero delay
         self.assertEqual(self.client.hard_fails, 0)
-        self.assertEqual(self.client.delay, 0)
+        self.assertEqual(self.client.delay._seconds, 0)
 
         # should increase failure counter
         self.client._in_case_of_failure()
@@ -407,7 +327,7 @@ class ScrobblerClientTests(unittest.TestCase):
 
         # should call _increase_delay()
         # mocking _increase_delay to assure that it was called
-        with patch.object(LegacyScrobbler, "_increase_delay") as mock_method:
+        with patch.object(interface.Delay, "increase") as mock_method:
             self.client._in_case_of_failure()
             mock_method.assert_called()
 
@@ -420,32 +340,4 @@ class ScrobblerClientTests(unittest.TestCase):
 
         # reset
         self.client.hard_fails = 0
-        self.client.delay = 0
-
-    def test_increase_delay(self):
-        """
-        Tests legacy_scrobbler.client.LegacyScrobbler._increase_delay()
-
-        Per protocol: "If a hard failure occurs at the handshake phase, the
-        client should initially pause for 1 minute before handshaking again.
-        Subsequent failed handshakes should double this delay up to a maximum
-        delay of 120 minutes."
-        https://www.last.fm/api/submissions
-        """
-        # delay should be zero in the beginning
-        self.assertEqual(self.client.delay, 0)
-
-        # increasing the delay should first result in one minute delay and
-        # then double with every increase
-        for minute in [1, 2, 4, 8, 16, 32, 64]:
-            self.client._increase_delay()
-            self.assertEqual(self.client.delay, minute * 60)
-
-        # up to 120 minutes max
-        self.client._increase_delay()
-        self.assertEqual(self.client.delay, 120 * 60)
-        self.client._increase_delay()
-        self.assertEqual(self.client.delay, 120 * 60)
-
-        # reset delay to zero
-        self.client.delay = 0
+        self.client.delay.reset()
