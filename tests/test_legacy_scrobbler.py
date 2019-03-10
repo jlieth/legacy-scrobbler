@@ -4,7 +4,7 @@ import random
 import unittest
 from unittest.mock import patch, Mock, PropertyMock
 
-from legacy_scrobbler.clients import interface
+from legacy_scrobbler.clients import base
 from legacy_scrobbler.clients.legacy import LegacyScrobbler
 from legacy_scrobbler.listen import Listen
 from legacy_scrobbler.exceptions import (
@@ -59,7 +59,7 @@ class ScrobblerClientTests(unittest.TestCase):
             ),
         ]
 
-    @patch.object(interface.Delay, "is_active", new_callable=PropertyMock)
+    @patch.object(base.Delay, "is_active", new_callable=PropertyMock)
     @patch.object(LegacyScrobbler, "_execute_request")
     def test_tick(self, mocked_execute_request: Mock, mocked_is_active: Mock):
         """
@@ -82,17 +82,17 @@ class ScrobblerClientTests(unittest.TestCase):
         - if self.state is "no_session" and delay.is_active returns False,
           execute_request should be called with the arguments:
             method=self.handshake
-            else_cb=self.on_successful_handshake_cb
-            finally_cb=self.on_handshake_attempt_cb
+            else_cb=self.on_handshake_success
+            finally_cb=self.on_handshake
         - if self.state is "idle" and self.np is set, _execute_request should
           be called with the arguments:
             method=self.nowplaying
-            else_cb=self.on_successful_nowplaying_cb
+            else_cb=self.on_nowplaying_success
             arg=self.np
         - if self.state is "idle" and self.queue contains listens,
           _execute_request should be called with the arguments:
             method=self.scrobble
-            else_cb=self.on_successful_scrobble_cb
+            else_cb=self.on_scrobble_success
             arg=deque(list(self.queue)[:50])
 
 
@@ -120,29 +120,29 @@ class ScrobblerClientTests(unittest.TestCase):
         # if self.state is "no_session" and delay.is_active returns False,
         # execute_request should be called with the arguments:
         #   method=self.handshake
-        #   else_cb=self.on_successful_handshake_cb
-        #   finally_cb=self.on_handshake_attempt_cb
+        #   else_cb=self.on_handshake_success
+        #   finally_cb=self.on_handshake
         self.client.state = "no_session"
         mocked_is_active.return_value = False
         self.client.tick()
         mocked_execute_request.assert_called_with(
             method=self.client.handshake,
-            else_cb=self.client.on_successful_handshake_cb,
-            finally_cb=self.client.on_handshake_attempt_cb,
+            else_cb=self.client.on_handshake_success,
+            finally_cb=self.client.on_handshake,
         )
         mocked_execute_request.reset_mock()
 
         # if self.state is "idle" and self.np is set, _execute_request should
         # be called with the arguments:
         #   method=self.nowplaying
-        #   else_cb=self.on_successful_nowplaying_cb
+        #   else_cb=self.on_nowplaying_success
         #   arg=self.np
         self.client.state = "idle"
         self.client.np = self.listens[0]
         self.client.tick()
         mocked_execute_request.assert_called_with(
             method=self.client.nowplaying,
-            else_cb=self.client.on_successful_nowplaying_cb,
+            else_cb=self.client.on_nowplaying_success,
             arg=self.client.np,
         )
         # unset self.client.np
@@ -151,14 +151,14 @@ class ScrobblerClientTests(unittest.TestCase):
         # if self.state is "idle" and self.queue contains listens,
         # _execute_request should be called with the arguments:
         #   method=self.scrobble
-        #   else_cb=self.on_successful_scrobble_cb
+        #   else_cb=self.on_scrobble_success
         #   arg=deque(list(self.queue)[:50])
         self.client.state = "idle"
         self.client.add_listens(self.listens)
         self.client.tick()
         mocked_execute_request.assert_called_with(
             method=self.client.scrobble,
-            else_cb=self.client.on_successful_scrobble_cb,
+            else_cb=self.client.on_scrobble_success,
             arg=deque(list(self.client.queue)[:50]),
         )
 
@@ -327,7 +327,7 @@ class ScrobblerClientTests(unittest.TestCase):
 
         # should call _increase_delay()
         # mocking _increase_delay to assure that it was called
-        with patch.object(interface.Delay, "increase") as mock_method:
+        with patch.object(base.Delay, "increase") as mock_method:
             self.client._in_case_of_failure()
             mock_method.assert_called()
 

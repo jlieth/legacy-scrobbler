@@ -5,7 +5,7 @@ from typing import Callable, Union
 
 from legacy_scrobbler.listen import Listen, Listens
 from legacy_scrobbler.network import Network
-from legacy_scrobbler.clients.interface import ScrobbleClientInterface
+from legacy_scrobbler.clients.base import ScrobbleClientBase
 from legacy_scrobbler.exceptions import (
     HandshakeError,
     HardFailureError,
@@ -14,14 +14,10 @@ from legacy_scrobbler.exceptions import (
     SubmissionWithoutListensError,
 )
 
-
 logger = logging.getLogger("legacy_scrobbler")
 
-# types
-Listen_or_list_of_Listens = Union[Listens, Listen]
 
-
-class LegacyScrobbler(ScrobbleClientInterface, Network):
+class LegacyScrobbler(Network, ScrobbleClientBase):
     """
     Client-side implementation of the Audioscrobbler protocol 1.2
 
@@ -45,7 +41,7 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
         legacy_scrobbler.network.Network. Arguments are the same. Please
         refer to the Network documentation for details about arguments.
         """
-        ScrobbleClientInterface.__init__(self)
+        ScrobbleClientBase.__init__(self)
         Network.__init__(
             self,
             name=name,
@@ -53,8 +49,6 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
             password_hash=password_hash,
             handshake_url=handshake_url,
         )
-
-        self.state = "no_session"
 
     def tick(self):
         """
@@ -71,8 +65,8 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
             logger.info("Executing handshake attempt")
             self._execute_request(
                 method=self.handshake,
-                else_cb=self.on_successful_handshake_cb,
-                finally_cb=self.on_handshake_attempt_cb,
+                else_cb=self.on_handshake_success,
+                finally_cb=self.on_handshake,
             )
 
         # if state is idle, check if a nowplaying request should be made
@@ -80,7 +74,7 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
             logger.info("Executing nowplaying attempt")
             self._execute_request(
                 method=self.nowplaying,
-                else_cb=self.on_successful_nowplaying_cb,
+                else_cb=self.on_nowplaying_success,
                 arg=self.np,
             )
 
@@ -90,61 +84,18 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
             scrobble_slice = deque(itertools.islice(self.queue, 0, 50))
             self._execute_request(
                 method=self.scrobble,
-                else_cb=self.on_successful_scrobble_cb,
+                else_cb=self.on_scrobble_success,
                 arg=scrobble_slice,
             )
-
-    def send_nowplaying(self, listen: Listen):
-        """
-        Sets the given Listen as the nowplaying track. Nowplaying request
-        will be send on the next tick (when self.state is "idle").
-
-        :param listen: Listen object
-        """
-        self.np = listen
-
-    def add_listens(self, listens: Listens):
-        """
-        Adds the given Listen objects to the queue so they can be scrobbled
-        on the next tick (when scrobbling is possible).
-
-        :param listens: Iterable of Listen objects that should be scrobbled
-        """
-        self.queue.extend(listens)
-        self._sort_queue()
 
     def _execute_request(
         self,
         method: Callable,
         else_cb: Callable = None,
         finally_cb: Callable = None,
-        arg: Listen_or_list_of_Listens = None,
+        arg: Union[Listens, Listen] = None,
     ):
-        """
-        Executes the given request method with the given arg and adds exception
-        handling. Request method has to be either self.handshake,
-        self.nowplaying or self.scrobble
 
-        Catches all exceptions that can be raised by any of the methods.
-        List of possible exceptions:
-        - raised by all methods: HardFailureError and RequestsError
-        - only raised by handshake: HandshakeError (with three Exceptions
-          inheriting from it but catching this exception is all we need to do)
-        - only raised by nowplaying and scrobble: BadSessionError and
-          SubmissionWithoutListensError
-
-        :param method: Callable. One of self.handshake, self.nowplaying and
-            self.scrobble
-        :param else_cb: Callable. Function that will be called in the else
-            block of the try/except/else/finally construct (i.e. actions to be
-            taken on successful completion of the request). No arguments.
-        :param finally_cb: Callable. Function that will be called in the finally
-            block of the try/except/else/finally construct (i.e. actions to be
-            taken regardless of success of the request, such as cleanup tasks).
-            No arguments.
-        :param arg: One Listen object if method is nowplaying, list of Listen
-            objects if method is scrobble, None if method is handshake
-        """
         assert method in [self.handshake, self.nowplaying, self.scrobble]
         req_type = method.__name__
 
@@ -188,10 +139,6 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
             if finally_cb:
                 finally_cb()
 
-    def _sort_queue(self):
-        """Sorts self.queue by date of listens objects in queue"""
-        self.queue = deque(sorted(self.queue, key=lambda listen: listen.date))
-
     def _in_case_of_failure(self):
         """
         Executes common tasks in case of a request failure.
@@ -208,41 +155,3 @@ class LegacyScrobbler(ScrobbleClientInterface, Network):
         if not self.state == "no_session" and self.hard_fails >= 3:
             self.state = "no_session"
             logger.info("Falling back to handshake phase")
-
-    def on_handshake_attempt_cb(self):
-        """
-        Callback after handshake attempt (regardless of success). Calls
-        self.delay.update() to set delay start time to now.
-        """
-        self.delay.update()
-
-    def on_successful_handshake_cb(self):
-        """
-        Callback after a successful handshake request. Resets hard failure
-        counter and delay, and sets self.state to idle.
-        """
-        self.hard_fails = 0
-        self.delay.reset()
-        self.state = "idle"
-        logger.info(f"Handshake successful. Received session id {self.session}")
-
-    def on_successful_nowplaying_cb(self):
-        """
-        Callback after a successful nowplaying request. Sets self.np back
-        to None.
-        """
-        self.np = None
-        logger.info("Nowplaying successful")
-
-    def on_successful_scrobble_cb(self):
-        """
-        Callback after a successful scrobble request. Each scrobble request
-        can submit 50 scrobbles at once. After a successful scrobble, we
-        can assume that the first 50 scrobbles in queue have been submitted
-        and can be removed from the queue.
-        """
-        self.queue = deque(itertools.islice(self.queue, 50, None))
-        logger.info(
-            f"Scrobbling successful. Length of remaining queue "
-            f"is now {len(self.queue)}"
-        )
