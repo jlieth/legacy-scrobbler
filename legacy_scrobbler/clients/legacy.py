@@ -1,5 +1,3 @@
-from collections import deque
-import itertools
 import logging
 from typing import Callable, Union
 
@@ -49,44 +47,6 @@ class LegacyScrobbler(Network, ScrobbleClientBase):
             password_hash=password_hash,
             handshake_url=handshake_url,
         )
-
-    def tick(self):
-        """
-        Tick function. Should be called from a main loop. Checks internal
-        state on each call and performs appropriate actions if the situation
-        calls for it. For example, if the internal state is "no_session", the
-        tick function will execute a handshake attempt. A handshake attempt
-        can be either successful or failed so on the next tick, the internal
-        state might still be "no_session" (on failure) or "idle" (on success).
-        """
-        # if no session exists and handshake attempt is allowed right now,
-        # execute handshake
-        if self.state == "no_session" and not self.delay.is_active:
-            logger.info("Executing handshake attempt")
-            self._execute_request(
-                method=self.handshake,
-                else_cb=self.on_handshake_success,
-                finally_cb=self.on_handshake,
-            )
-
-        # if state is idle, check if a nowplaying request should be made
-        elif self.state == "idle" and self.np is not None:
-            logger.info("Executing nowplaying attempt")
-            self._execute_request(
-                method=self.nowplaying,
-                else_cb=self.on_nowplaying_success,
-                arg=self.np,
-            )
-
-        # if state is idle, check if any scrobbles are queued
-        elif self.state == "idle" and len(self.queue) > 0:
-            logger.info("Executing scrobbling attempt")
-            scrobble_slice = deque(itertools.islice(self.queue, 0, 50))
-            self._execute_request(
-                method=self.scrobble,
-                else_cb=self.on_scrobble_success,
-                arg=scrobble_slice,
-            )
 
     def _execute_request(
         self,
