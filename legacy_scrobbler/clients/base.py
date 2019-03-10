@@ -48,9 +48,7 @@ class ScrobbleClientBase(abc.ABC):
         elif self.state == "idle" and self.np is not None:
             logger.info("Executing nowplaying attempt")
             self._execute_request(
-                method=self.nowplaying,
-                else_cb=self.on_nowplaying_success,
-                arg=self.np,
+                method=self.nowplaying, else_cb=self.on_nowplaying_success, arg=self.np
             )
 
         # if state is idle, check if any scrobbles are queued
