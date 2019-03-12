@@ -190,7 +190,9 @@ class ScrobblerClientTests(unittest.TestCase):
                 self.assertEqual(query_params["r[%i]" % i], listen.rating or "")
                 self.assertEqual(query_params["l[%i]" % i], str(listen.length))
                 self.assertEqual(query_params["b[%i]" % i], listen.album_title or "")
-                self.assertEqual(query_params["n[%i]" % i], str(listen.tracknumber or ""))
+                self.assertEqual(
+                    query_params["n[%i]" % i], str(listen.tracknumber or "")
+                )
                 self.assertEqual(query_params["m[%i]" % i], listen.mb_trackid or "")
 
             # send response

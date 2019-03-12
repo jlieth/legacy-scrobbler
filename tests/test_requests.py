@@ -70,8 +70,7 @@ class HandshakeRequestTests(RequestTests, unittest.TestCase):
 
     def setUp(self):
         self.request = HandshakeRequest(
-            url="http://doesntmatter.com",
-            params={"what": "ever"}
+            url="http://doesntmatter.com", params={"what": "ever"}
         )
 
     def test_handshake_request_on_success(self):
@@ -123,10 +122,7 @@ class PostRequestTests(RequestTests, unittest.TestCase):
     """Tests for legacy_scrobbler.requests.PostRequest"""
 
     def setUp(self):
-        self.request = PostRequest(
-            url="http://doesntmatter.com",
-            data={"what": "ever"}
-        )
+        self.request = PostRequest(url="http://doesntmatter.com", data={"what": "ever"})
 
     def test_post_request_on_success(self):
         """
