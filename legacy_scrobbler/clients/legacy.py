@@ -1,7 +1,7 @@
 import hashlib
 import logging
 import time
-from typing import Callable, Collection, Union
+from typing import Callable, Union
 
 from legacy_scrobbler.clients.base import ScrobbleClientBase
 from legacy_scrobbler.listen import Listen, Listens
