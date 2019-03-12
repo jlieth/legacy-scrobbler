@@ -2,22 +2,14 @@ import datetime
 import hashlib
 import unittest
 from urllib.parse import urlparse, parse_qs, unquote
-from typing import Callable
 
 import httmock
 import requests
 
 from legacy_scrobbler.listen import Listen
 from legacy_scrobbler import Network
-from legacy_scrobbler.exceptions import (
-    HardFailureError,
-    RequestsError,
-    ClientBannedException,
-    BadAuthException,
-    BadTimeException,
-    BadSessionError,
-    SubmissionWithoutListensError,
-)
+
+from .data.listens import listens
 
 
 class NetworkTests(unittest.TestCase):
@@ -32,26 +24,6 @@ class NetworkTests(unittest.TestCase):
         )
 
     @staticmethod
-    def simple_request_callback(content="", status_code=200) -> Callable:
-        """
-        Wrapper function that returns a function for use as a httmock callback.
-        The callback function will return a request with the content and
-        status_code given to the wrapper function.
-
-        :param content: Content of the response object of the callback.
-        :param status_code: Status code of the response object of the callback.
-        :return: The callable function
-        """
-
-        @httmock.all_requests
-        def inner(url, request):
-            return httmock.response(
-                content=content, status_code=status_code, request=request
-            )
-
-        return inner
-
-    @staticmethod
     def required_params_present(required: list, received: list) -> bool:
         """
         Compares two lists against each other to find out if all elements in
@@ -61,7 +33,11 @@ class NetworkTests(unittest.TestCase):
         :param received: list (of strings)
         :return: bool
         """
-        return False not in [x in received for x in required]
+        is_present = [x in received for x in required]
+        all_present = False not in is_present
+        if not all_present:
+            print(set(required) - set(received))
+        return all_present
 
 
 class HandshakeTests(NetworkTests):
@@ -70,7 +46,7 @@ class HandshakeTests(NetworkTests):
     legacy_scrobbler.network.Network._process_handshake_response()
     """
 
-    def test_handshake_request(self):
+    def test_handshake(self):
         """
         Tests legacy_scrobbler.network.Network.handshake() for protocol
         conformance. Basically, the callback for the handshake request
@@ -121,122 +97,8 @@ class HandshakeTests(NetworkTests):
         with httmock.HTTMock(validate_handshake):
             self.network.handshake()
 
-    def test_handshake_request_on_status_exception(self):
-        """
-        Tests legacy_scrobbler.network.Network.handshake() with a response
-        status code of 500. Responses with a different status code than 200
-        during the handshake phase should be counted as a hard failure, so
-        a HardFailureError should be raised in this case.
-        """
-        with httmock.HTTMock(self.simple_request_callback(status_code=500)):
-            self.assertRaises(HardFailureError, self.network.handshake)
 
-    def test_handshake_request_on_requests_exception(self):
-        """
-        Tests legacy_scrobbler.network.Network.handshake() when the requests
-        attempt raises a requests.exceptions.RequestException. Should raise
-        a legacy_scrobbler.exceptions.RequestsError.
-        """
-
-        @httmock.all_requests
-        def raises_requests_exception(url, request):
-            raise requests.exceptions.RequestException()
-
-        with httmock.HTTMock(raises_requests_exception):
-            self.assertRaises(RequestsError, self.network.handshake)
-
-    def test_handshake_response_processing_on_success(self):
-        """
-        Tests legacy_scrobbler.network.Network._process_handshake_response()
-        with a successful handshake as server response. After processing,
-        the information from the response should be saved in the network
-        object.
-        """
-        # create callback with the a bogus (but successful) response
-        response_content = "OK\nsessionid\nnowplaying_url\nscrobble_url\n"
-        callback = self.simple_request_callback(response_content)
-
-        # mock the request and call the response processor
-        with httmock.HTTMock(callback):
-            response = requests.get(self.network.handshake_url)
-            self.network._process_handshake_response(response)
-
-        # after processing, the content of the response should be saved to the network object
-        self.assertEqual(self.network.session, "sessionid")
-        self.assertEqual(self.network.nowplaying_url, "nowplaying_url")
-        self.assertEqual(self.network.scrobble_url, "scrobble_url")
-
-    def test_handshake_response_processing_on_banned(self):
-        """
-        Tests legacy_scrobbler.network.Network._process_handshake_response()
-        with the server response "BANNED". This response should raise
-        a ClientBannedException.
-        """
-        # create callback that returns a response with "BANNED" as content
-        callback = self.simple_request_callback(content="BANNED")
-
-        # mock the request and call the response processor
-        with httmock.HTTMock(callback):
-            response = requests.get(self.network.handshake_url)
-            self.assertRaises(
-                ClientBannedException,
-                self.network._process_handshake_response,
-                response,
-            )
-
-    def test_handshake_response_processing_on_badauth(self):
-        """
-        Tests legacy_scrobbler.network.Network._process_handshake_response()
-        with the server response "BADAUTH". This response should raise
-        a BadAuthException.
-        """
-        # create callback that returns a response with "BADAUTH" as content
-        callback = self.simple_request_callback(content="BADAUTH")
-
-        # mock the request and call the response processor
-        with httmock.HTTMock(callback):
-            response = requests.get(self.network.handshake_url)
-            self.assertRaises(
-                BadAuthException, self.network._process_handshake_response, response
-            )
-
-    def test_handshake_response_processing_on_badtime(self):
-        """
-        Tests legacy_scrobbler.network.Network._process_handshake_response()
-        with the server response "BADTIME". This response should raise
-        a BadTimeException.
-        """
-        # create callback that returns a response with "BADTIME" as content
-        callback = self.simple_request_callback(content="BADTIME")
-
-        # mock the request and call the response processor
-        with httmock.HTTMock(callback):
-            response = requests.get(self.network.handshake_url)
-            self.assertRaises(
-                BadTimeException, self.network._process_handshake_response, response
-            )
-
-    def test_handshake_response_processing_on_other_response(self):
-        """
-        Tests legacy_scrobbler.network.Network._process_handshake_response()
-        with a server response that is not in protocol. This response should
-        raise a HardFailureError.
-        """
-        # create callback that returns a response with "foobar" as content
-        callback = self.simple_request_callback(content="foobar")
-
-        # mock the request and call the response processor
-        with httmock.HTTMock(callback):
-            response = requests.get(self.network.handshake_url)
-            self.assertRaises(
-                HardFailureError, self.network._process_handshake_response, response
-            )
-
-
-class PostRequestSetup(NetworkTests):
-    """
-    Setup for the post request TestCases
-    """
+class PostRequestTests(NetworkTests):
 
     def setUp(self):
         super().setUp()
@@ -287,111 +149,7 @@ class PostRequestSetup(NetworkTests):
             ),
         ]
 
-
-class PostRequestTests(PostRequestSetup):
-    """
-    Tests for legacy_scrobbler.network.Network._make_post_request() and
-    legacy_scrobbler.network.Network._process_post_response(), which are
-    internally used by the two types of post request (scrobble and
-    nowplaying)
-    """
-
-    def test_post_request_without_session(self):
-        """
-        Tests legacy_scrobbler.network.Network._make_post_request() when no
-        session id is saved in the Network object. This should raise a
-        BadSessionError.
-        """
-        self.network.session = None
-        self.assertRaises(
-            BadSessionError,
-            self.network._make_post_request,
-            request_type="nowplaying",
-            listens=self.listens,
-        )
-        self.network.session = self.session
-
-    def test_post_request_without_listens(self):
-        """
-        Tests that legacy_scrobbler.network.Network._make_post_request() raises
-        SubmissionWithoutListensError when called without listens.
-        """
-        self.assertRaises(
-            SubmissionWithoutListensError,
-            self.network._make_post_request,
-            request_type="nowplaying",
-            listens=None,
-        )
-
-    def test_post_request_on_status_exception(self):
-        """
-        Tests legacy_scrobbler.network.Network._make_post_request() with a
-        response status code of 500. Responses with a different status code
-        than 200 should be counted as a hard failure, so a HardFailureError
-        should be raised in this case.
-        """
-        with httmock.HTTMock(self.simple_request_callback(status_code=500)):
-            self.assertRaises(
-                HardFailureError,
-                self.network._make_post_request,
-                request_type="nowplaying",
-                listens=self.listens,
-            )
-
-    def test_post_request_on_requests_exception(self):
-        """
-        Tests legacy_scrobbler.network.Network._make_post_request() when the
-        requests attempt raises a requests.exceptions.RequestException. Should
-        raise a legacy_scrobbler.exceptions.RequestsError.
-        """
-
-        @httmock.all_requests
-        def raises_requests_exception(url, request):
-            raise requests.exceptions.RequestException()
-
-        with httmock.HTTMock(raises_requests_exception):
-            self.assertRaises(
-                RequestsError,
-                self.network._make_post_request,
-                request_type="nowplaying",
-                listens=self.listens,
-            )
-
-    def test_post_response_processing_on_badsession(self):
-        """
-        Tests legacy_scrobbler.network.Network._process_post_response()
-        with the server response "BADSESSION". This response should raise
-        a BadSessionError.
-        """
-        # create callback that returns a response with "BADSESSION" as content
-        callback = self.simple_request_callback(content="BADSESSION")
-
-        # mock the request and call the response processor
-        with httmock.HTTMock(callback):
-            response = requests.get(self.network.nowplaying_url)
-            self.assertRaises(
-                BadSessionError, self.network._process_post_response, response
-            )
-
-    def test_post_response_processing_on_other_response(self):
-        """
-        Tests legacy_scrobbler.network.Network._process_post_response()
-        with a server response that is not in protocol. This response should
-        raise a HardFailureError.
-        """
-        # create callback that returns a response with "foobar" as content
-        callback = self.simple_request_callback(content="foobar")
-
-        # mock the request and call the response processor
-        with httmock.HTTMock(callback):
-            response = requests.get(self.network.handshake_url)
-            self.assertRaises(
-                HardFailureError, self.network._process_post_response, response
-            )
-
-
-class NowplayingTests(PostRequestSetup):
-    """Tests for legacy_scrobbler.network.Network.nowplaying()"""
+        self.listens = listens[:1]
 
     def test_nowplaying_request(self):
         """
@@ -402,7 +160,7 @@ class NowplayingTests(PostRequestSetup):
         """
 
         @httmock.all_requests
-        def validate_nowplaying(url, request):
+        def validate_nowplaying(url, request: requests.PreparedRequest):
             """This is the callback for a nowplaying request."""
             # nowplaying method should be POST
             self.assertEqual(request.method, "POST")
@@ -411,7 +169,7 @@ class NowplayingTests(PostRequestSetup):
             unquote(request.body, encoding="utf-8", errors="strict")
 
             # extract received query params from request body
-            query_params = parse_qs(request.body)
+            query_params = parse_qs(request.body, keep_blank_values=True)
 
             # check that all required params present
             required = ["s", "a", "t", "b", "l", "n", "m"]
@@ -431,20 +189,16 @@ class NowplayingTests(PostRequestSetup):
             self.assertEqual(query_params["s"], self.session)
             self.assertEqual(query_params["a"], listen.artist_name)
             self.assertEqual(query_params["t"], listen.track_title)
-            self.assertEqual(query_params["b"], listen.album_title)
-            self.assertEqual(query_params["l"], str(listen.length))
-            self.assertEqual(query_params["n"], str(listen.tracknumber))
-            self.assertEqual(query_params["m"], listen.mb_trackid)
+            self.assertEqual(query_params["b"], listen.album_title or "")
+            self.assertEqual(query_params["l"], str(listen.length or ""))
+            self.assertEqual(query_params["n"], str(listen.tracknumber or ""))
+            self.assertEqual(query_params["m"], listen.mb_trackid or "")
 
             # send response
             return httmock.response(content="OK\n", status_code=200, request=request)
 
         with httmock.HTTMock(validate_nowplaying):
             self.network.nowplaying(self.listens[0])
-
-
-class ScrobbleTests(PostRequestSetup):
-    """Tests for legacy_scrobbler.network.Network.scrobble()"""
 
     def build_list_of_required_params(self) -> list:
         """
@@ -472,7 +226,7 @@ class ScrobbleTests(PostRequestSetup):
                 params.append(param % i)
         return params
 
-    def test_submit_request(self):
+    def test_scrobble_request(self):
         """
         Tests legacy_scrobbler.network.Network.scrobble() for protocol
         conformance. Basically, the callback for the scrobble request
@@ -481,7 +235,7 @@ class ScrobbleTests(PostRequestSetup):
         """
 
         @httmock.all_requests
-        def validate_submit(url, request):
+        def validate_scrobble(url, request):
             """This is the callback for a scrobble request."""
             # scrobble method should be POST
             self.assertEqual(request.method, "POST")
@@ -490,7 +244,7 @@ class ScrobbleTests(PostRequestSetup):
             unquote(request.body, encoding="utf-8", errors="strict")
 
             # extract received query params from request body
-            query_params = parse_qs(request.body)
+            query_params = parse_qs(request.body, keep_blank_values=True)
 
             # get list of required params and check that all are present
             required = self.build_list_of_required_params()
@@ -515,14 +269,14 @@ class ScrobbleTests(PostRequestSetup):
                 self.assertEqual(query_params["t[%i]" % i], listen.track_title)
                 self.assertEqual(query_params["i[%i]" % i], str(listen.timestamp))
                 self.assertEqual(query_params["o[%i]" % i], listen.source)
-                self.assertEqual(query_params["r[%i]" % i], listen.rating)
+                self.assertEqual(query_params["r[%i]" % i], listen.rating or "")
                 self.assertEqual(query_params["l[%i]" % i], str(listen.length))
-                self.assertEqual(query_params["b[%i]" % i], listen.album_title)
-                self.assertEqual(query_params["n[%i]" % i], str(listen.tracknumber))
-                self.assertEqual(query_params["m[%i]" % i], listen.mb_trackid)
+                self.assertEqual(query_params["b[%i]" % i], listen.album_title or "")
+                self.assertEqual(query_params["n[%i]" % i], str(listen.tracknumber or ""))
+                self.assertEqual(query_params["m[%i]" % i], listen.mb_trackid or "")
 
             # send response
             return httmock.response(content="OK\n", status_code=200, request=request)
 
-        with httmock.HTTMock(validate_submit):
-            self.network.scrobble(self.listens)
+        with httmock.HTTMock(validate_scrobble):
+            self.network.scrobble(self.listens[:50])
