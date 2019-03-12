@@ -212,3 +212,32 @@ class BaseClientTests(unittest.TestCase):
         # reset
         self.client.hard_fails = 0
         self.client.delay.reset()
+
+    def test_callbacks(self):
+        # on_handshake
+        with patch.object(self.client.delay, "update") as mock_method:
+            self.client.on_handshake()
+            mock_method.assert_called()
+
+        # on_handshake_success
+        self.client.hard_fails = 23
+        self.client.state = "no_session"
+        with patch.object(self.client.delay, "reset") as mock_method:
+            self.client.on_handshake_success()
+            mock_method.assert_called()
+        self.assertEqual(self.client.hard_fails, 0)
+        self.assertEqual(self.client.state, "idle")
+
+        # on_nowplaying_success
+        self.client.np = self.listens[0]
+        self.client.on_nowplaying_success()
+        self.assertIsNone(self.client.np)
+
+        # on_scrobble_success
+        self.client.queue = deque(self.listens)
+        len_before = len(self.client.queue)
+        self.client.on_scrobble_success()
+        len_after = len(self.client.queue)
+        self.assertEqual(len_before - len_after, 50)
+        expected_remaining_queue = deque(self.listens[50:])
+        self.assertEqual(self.client.queue, expected_remaining_queue)
