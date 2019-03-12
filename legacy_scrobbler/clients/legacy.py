@@ -1,9 +1,12 @@
+import hashlib
 import logging
-from typing import Callable, Union
+import time
+from typing import Callable, Collection, Union
 
-from legacy_scrobbler.listen import Listen, Listens
-from legacy_scrobbler.network import Network
 from legacy_scrobbler.clients.base import ScrobbleClientBase
+from legacy_scrobbler.listen import Listen, Listens
+from legacy_scrobbler.requests import HandshakeRequest, PostRequest
+from legacy_scrobbler.version import __version__
 from legacy_scrobbler.exceptions import (
     HandshakeError,
     HardFailureError,
@@ -15,38 +18,79 @@ from legacy_scrobbler.exceptions import (
 logger = logging.getLogger("legacy_scrobbler")
 
 
-class LegacyScrobbler(Network, ScrobbleClientBase):
-    """
-    Client-side implementation of the Audioscrobbler protocol 1.2
+class LegacyScrobbler(ScrobbleClientBase):
+    """Client-side implementation of the Audioscrobbler protocol 1.2"""
 
-    Inherits from legacy_scrobbler.network.Network and adds error handling,
-    request delays and timing functionality through a tick() function that can
-    be called from a main loop.
-
-    Instead of calling the nowplaying() and scrobble() methods directly,
-    Listens should be enqueued with the add_listens() method
-    TODO: nowplaying
-
-    The handshake() method should never be called on LegacyScrobbler objects
-    because they manage their internal state automatically.
-    """
+    CLIENT_NAME = "legacy"
+    CLIENT_VERSION = __version__
 
     def __init__(
         self, name: str, username: str, password_hash: str, handshake_url: str
     ):
         """
-        Creates a LegacyScrobbler object. Inherits from
-        legacy_scrobbler.network.Network. Arguments are the same. Please
-        refer to the Network documentation for details about arguments.
+        Creates a LegacyScrobbler object.
+
+        :param name: String. Name of the scrobbler network.
+        :param username: String. Name of the user on the scrobbler network.
+        :param password_hash: String. md5-hashed password of the given user.
+            Hash the password before passing it to the constructor. Do not
+            give the plaintext password.
+        :param handshake_url: String. Url of the handshake endpoint of the
+            scrobble service
         """
-        ScrobbleClientBase.__init__(self)
-        Network.__init__(
-            self,
-            name=name,
-            username=username,
-            password_hash=password_hash,
-            handshake_url=handshake_url,
-        )
+        super().__init__()
+
+        self.name = name
+        self.username = username
+        self.password_hash = password_hash.encode("utf-8")
+        self.handshake_url = handshake_url
+
+        self.nowplaying_url = None
+        self.scrobble_url = None
+        self.session = None
+
+    def handshake(self):
+        """
+        Sends a handshake request to the remote scrobbler server.
+        """
+        # create auth token, which is md5(md5(password) + timestamp)
+        # password is already hashed so we don't need the inner md5(password)
+        timestamp = str(int(time.time())).encode("utf-8")
+        auth = hashlib.md5(self.password_hash + timestamp).hexdigest()
+
+        params = {
+            "hs": "true",
+            "p": "1.2",
+            "c": self.CLIENT_NAME,
+            "v": self.CLIENT_VERSION,
+            "u": self.username,
+            "t": timestamp,
+            "a": auth,
+        }
+
+        # make request
+        result = HandshakeRequest(self.handshake_url, params).execute()
+        self.session, self.nowplaying_url, self.scrobble_url = result
+
+    def nowplaying(self, listen: Listen):
+        """
+        Sends a nowplaying request for the given Listen to the scrobbler service.
+
+        :param listen: A Listen object
+        """
+        data = listen.nowplaying_params()
+        data["s"] = self.session
+        PostRequest(self.nowplaying_url, data).execute()
+
+    def scrobble(self, listens: Listens):
+        """
+        Scrobbles the given Listens to the scrobbler service.
+
+        :param listens: Collection of Listen objects
+        """
+        data = Listen.scrobble_params_many(listens)
+        data["s"] = self.session
+        PostRequest(self.scrobble_url, data).execute()
 
     def _execute_request(
         self,
@@ -98,20 +142,3 @@ class LegacyScrobbler(Network, ScrobbleClientBase):
         finally:
             if finally_cb:
                 finally_cb()
-
-    def _in_case_of_failure(self):
-        """
-        Executes common tasks in case of a request failure.
-        - increases hard failure counter
-        - calls self.delay.increase()
-        - if number of failures >= 3, the client falls back to handshake phase
-        """
-        self.hard_fails += 1
-        self.delay.increase()
-        logger.info(f"Number of hard failures is now {self.hard_fails}.")
-        logger.info(f"Delay is now {self.delay._seconds} seconds.")
-
-        # fall back to handshake phase if failure count >= 3
-        if not self.state == "no_session" and self.hard_fails >= 3:
-            self.state = "no_session"
-            logger.info("Falling back to handshake phase")

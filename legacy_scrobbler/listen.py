@@ -125,6 +125,22 @@ class Listen:
             f"m[{idx}]": self.mb_trackid or "",
         }
 
+    @staticmethod
+    def scrobble_params_many(listens: "Listens"):
+        """
+        Generates the scrobble param dict for multiple Listen objects at once
+        with the correct indices.
+
+        :param listens: Iterable of Listen objects
+        :return: dict of params used in a scrobble request
+        """
+        params = {}
+        for i, listen in enumerate(listens):
+            scrobble_params = listen.scrobble_params(idx=i)
+            params.update(scrobble_params)
+
+        return params
+
     def eligible_for_scrobbling(
         self, reference: Optional[datetime.datetime] = None
     ) -> bool:

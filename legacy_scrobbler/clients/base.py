@@ -120,6 +120,23 @@ class ScrobbleClientBase(abc.ABC):
         """Sorts self.queue by date of listens objects in queue"""
         self.queue = deque(sorted(self.queue, key=lambda listen: listen.date))
 
+    def _in_case_of_failure(self):
+        """
+        Executes common tasks in case of a request failure.
+        - increases hard failure counter
+        - calls self.delay.increase()
+        - if number of failures >= 3, the client falls back to handshake phase
+        """
+        self.hard_fails += 1
+        self.delay.increase()
+        logger.info(f"Number of hard failures is now {self.hard_fails}.")
+        logger.info(f"Delay is now {self.delay._seconds} seconds.")
+
+        # fall back to handshake phase if failure count >= 3
+        if not self.state == "no_session" and self.hard_fails >= 3:
+            self.state = "no_session"
+            logger.info("Falling back to handshake phase")
+
     def on_handshake(self):
         """
         Callback after handshake attempt (regardless of success). Calls
